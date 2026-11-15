@@ -61,17 +61,44 @@ have not been reviewed by an agronomist; they deliberately stop at "measure",
 - **Rotation advisor** — current rotation plus three alternatives (water saving,
   soil building, income and resilience). Each shows why it was suggested, the
   evidence, benefits, data gaps and risks to review with an agronomist.
+- **Rotation length 3–5 years** — exhaustive search up to 4 years, beam search
+  for 5; alfalfa is placed as a 2–3-year block. A crop never returns to the
+  field sooner than 3 years in a suggestion (second crops included), and a
+  second crop is never followed by a main crop of the same family.
 - **Year types** — every strategy is scored in dry, normal and wet years.
+  Next to the statistical clusters, an agronomic criterion: a year is dry if
+  the warm-season water deficit is at least 50 mm (500 m³/ha) above normal.
 - **Farmer priorities** — sliders for water, soil, income and weather resilience.
 - **"What if" scenario** — rainfall and temperature sliders.
+- **Elevation correction** — temperature is adjusted for the difference between
+  the field (SRTM) and the NASA POWER grid cell (6.5 °C/km).
+- **Frost dates and sowing to the decade** — from 35 years of daily NASA POWER
+  data: last spring frost (median and 10% risk), first autumn frost, frost-free
+  period; spring sowing when the daily normal reaches the crop's minimum and
+  frost risk is ≤10%.
 - **Field conditions** — irrigation method losses, soil texture, pH, SRTM slope.
+- **Soil card** — salinity class, groundwater depth, humus, N/P/K entered by
+  the farmer (unknown stays unknown). Salt tolerance per crop from FAO
+  thresholds, waterlogging sensitivity, secondary salinization risk.
+- **Income in money** — the farmer enters price, yield and costs; margin per
+  hectare per year is shown. Without data the income stays a 1–5 index and the
+  gap is listed.
+- **Yields vs scores** — recorded yields are compared with the advisor's
+  climate score for the same year's weather (Pearson r from 3 years up), and
+  the farmer's average yield replaces the typed-in yield in the money
+  calculation.
 - **Regional tuning** — crops typical for Sughd, second crops after winter cereals.
 - **Offline assistant** — chat that answers from the field's own data.
+- **Model sharing** — the language model file can be imported from storage
+  or shared to another phone (AirDrop, Bluetooth, Nearby Share); every file is
+  checked by size, GGUF signature and the official SHA-256 before use.
 - **Map** — NASA GIBS layers (MODIS NDVI, SMAP soil moisture, GPM IMERG rainfall,
   MODIS land-surface temperature) and field markers coloured by water stress.
 - **Knowledge base** — 22 short offline articles explaining the terms.
 - **Observations** — describe what you see in plain words; get extracted facts
-  with sources, missing data, contradictions, a recommendation and a plan.
+  with sources, missing data, contradictions, a recommendation and a plan. The
+  interpreter tolerates one typo in long word roots and knows common Russian
+  synonyms and basic Tajik words.
 - **Crop lifecycle** — eight stages with controlled transitions, stored locally.
 - **Field memory** — timeline of observations, irrigations and stage changes.
 
@@ -80,10 +107,13 @@ have not been reviewed by an agronomist; they deliberately stop at "measure",
 | Source | Used for | Access |
 |---|---|---|
 | [NASA POWER](https://power.larc.nasa.gov/) climatology and monthly history | Temperature, rainfall, frost days, root-zone soil wetness; water balance, sowing windows, year types, trends | Downloaded once per field, cached in SQLite |
+| NASA POWER daily (T2M, T2M_MIN, 1991–last year) | Frost dates with probability, sowing to the decade | Downloaded once per field, cached |
 | [NASA SRTM](https://www.earthdata.nasa.gov/data/instruments/srtm) via [OpenTopoData](https://www.opentopodata.org/) | Elevation and slope → erosion risk | Downloaded once per field, cached |
 | [NASA GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) | Map layers: MODIS NDVI, SMAP L4 root-zone soil moisture, GPM IMERG precipitation, MODIS LST | Online map tiles |
 | [OpenStreetMap](https://www.openstreetmap.org/copyright) | Base map | Online map tiles |
 | FAO-56 (Allen et al., 1998) | Hargreaves reference evapotranspiration, crop coefficient approach | Method, implemented in code |
+| FAO Irrigation and Drainage Paper 29 (Ayers & Westcot, 1985); Maas–Hoffman | Crop salt-tolerance thresholds (ECe) | Approximate values in the crop catalogue |
+| UNEP aridity index classes | Class of the warm-season P/ET0 ratio | Method |
 | [Qwen2.5-0.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) (Apache 2.0) | Optional on-device language model | Downloaded once in the chat tab |
 
 Crop parameters in `lib/data/crop_catalog.dart` are generalized reference values
@@ -91,14 +121,18 @@ chosen by the developers; they have not been reviewed by a local agronomist.
 
 ## Limitations
 
-- Climate data is a ~50 km grid cell; a field's microclimate is not captured.
-- Calculations use monthly steps, so sowing dates are accurate to the month.
-- Market value is a 1–5 index, not local prices; yields and costs are not modelled.
-- Scores are for comparing options with each other and are not calibrated
-  against measured yields.
-- Salinity, groundwater level and nutrient status are not in the data.
-- Rotations are three years with one main crop per year; perennial alfalfa is
-  simplified.
+- Climate data is a ~50 km grid cell. Elevation is corrected with a standard
+  lapse rate; slope aspect, valleys and other microclimate are not.
+- The rotation engine works in monthly steps; spring and winter-crop sowing
+  dates are refined to the decade from daily data, catch crops stay monthly.
+- There are no built-in prices; money income requires the farmer's own prices,
+  yields and costs. Second crops are assumed to yield 60% of a main-season crop.
+- Scores are not calibrated automatically. Recorded yields are compared with
+  the scores, but a few years cannot confirm or refute them.
+- Soil salinity, groundwater and nutrients come only from the farmer; salt
+  thresholds are approximate and the 10%-per-dS/m loss is an average slope.
+- Tajik words and phrases were added by the developers and need a native
+  speaker's review.
 - Only one region profile (Sughd) exists; elsewhere a general crop list is used.
 - SMAP, GPM and MODIS are shown as map layers; the numeric analysis uses
   NASA POWER and SRTM.
@@ -121,9 +155,12 @@ flutter analyze
 flutter test
 ```
 
-Tests cover the scoring engine, the three models, the NASA response parsers
-(with real responses saved as fixtures) and database migrations up to schema v6, plus the observation
-interpreter (a 16-phrase evaluation set), validator, decision rules and lifecycle.
+133 tests cover the scoring engine (including 3–5-year rotations and the
+return-interval rule), the models, NASA response parsers (real monthly and daily
+responses saved as fixtures), elevation correction, frost dates, salinity,
+money income, yield calibration, model-file checks, database migrations up to
+schema v7, and the observation interpreter on a 32-phrase evaluation set
+(typos, synonyms, Tajik) written by the developers.
 
 ## Structure
 

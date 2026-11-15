@@ -70,6 +70,17 @@ class CropProfile {
   /// Подходит как повторная культура: второй урожай после ранней уборки.
   final bool secondCrop;
 
+  /// Порог солеустойчивости: электропроводность почвенной вытяжки ECe,
+  /// дС/м, до которой урожай не снижается. Ориентиры FAO (Ayers & Westcot,
+  /// 1985) и Maas–Hoffman; null — в справочнике нет надёжного значения.
+  final double? saltThreshold;
+
+  /// Плохо переносит переувлажнение и близкие грунтовые воды.
+  final bool waterloggingSensitive;
+
+  /// Сколько лет подряд культура может занимать поле (многолетние).
+  final int perennialYears;
+
   const CropProfile({
     required this.id,
     required this.name,
@@ -94,7 +105,12 @@ class CropProfile {
     this.phMax = 7.5,
     this.isCover = false,
     this.secondCrop = false,
+    this.saltThreshold,
+    this.waterloggingSensitive = false,
+    this.perennialYears = 1,
   });
+
+  bool get isPerennial => perennialYears > 1;
 
   /// Сколько месяцев активного роста нужно культуре.
   int get requiredActiveMonths => overwinters ? activeMonths : cycleMonths;

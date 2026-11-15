@@ -26,6 +26,7 @@ class CropCatalog {
       rootDepth: 2,
       phMin: 6.0,
       phMax: 7.8,
+      saltThreshold: 6.0,
     ),
     CropProfile(
       id: 'barley',
@@ -46,6 +47,7 @@ class CropCatalog {
       forage: true,
       phMin: 6.0,
       phMax: 8.2,
+      saltThreshold: 8.0,
     ),
     CropProfile(
       id: 'maize',
@@ -65,6 +67,7 @@ class CropCatalog {
       forage: true,
       phMin: 5.8,
       phMax: 7.5,
+      saltThreshold: 1.7,
     ),
     CropProfile(
       id: 'sorghum',
@@ -84,6 +87,7 @@ class CropCatalog {
       forage: true,
       phMin: 5.8,
       phMax: 8.2,
+      saltThreshold: 6.8,
     ),
     CropProfile(
       id: 'rice',
@@ -102,6 +106,7 @@ class CropCatalog {
       rootDepth: 1,
       phMin: 5.5,
       phMax: 7.0,
+      saltThreshold: 3.0,
     ),
     CropProfile(
       id: 'cotton',
@@ -120,6 +125,7 @@ class CropCatalog {
       rootDepth: 3,
       phMin: 6.0,
       phMax: 8.2,
+      saltThreshold: 7.7,
     ),
     CropProfile(
       id: 'potato',
@@ -138,6 +144,8 @@ class CropCatalog {
       rootDepth: 1,
       phMin: 5.0,
       phMax: 6.8,
+      saltThreshold: 1.7,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'vegetables',
@@ -156,6 +164,8 @@ class CropCatalog {
       rootDepth: 2,
       phMin: 6.0,
       phMax: 7.5,
+      saltThreshold: 2.5,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'onion',
@@ -175,6 +185,8 @@ class CropCatalog {
       rootDepth: 1,
       phMin: 6.0,
       phMax: 7.5,
+      saltThreshold: 1.2,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'melon',
@@ -193,6 +205,8 @@ class CropCatalog {
       rootDepth: 3,
       phMin: 6.0,
       phMax: 7.8,
+      saltThreshold: 2.2,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'sunflower',
@@ -211,6 +225,8 @@ class CropCatalog {
       rootDepth: 3,
       phMin: 6.0,
       phMax: 8.0,
+      saltThreshold: 4.8,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'safflower',
@@ -230,6 +246,7 @@ class CropCatalog {
       rootDepth: 3,
       phMin: 6.0,
       phMax: 8.5,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'chickpea',
@@ -250,6 +267,7 @@ class CropCatalog {
       nitrogenFixing: true,
       phMin: 6.0,
       phMax: 8.5,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'mung',
@@ -270,6 +288,8 @@ class CropCatalog {
       secondCrop: true,
       phMin: 6.0,
       phMax: 8.0,
+      saltThreshold: 1.8,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'soybean',
@@ -290,6 +310,7 @@ class CropCatalog {
       forage: true,
       phMin: 6.0,
       phMax: 7.5,
+      saltThreshold: 5.0,
     ),
     CropProfile(
       id: 'alfalfa',
@@ -311,6 +332,9 @@ class CropCatalog {
       forage: true,
       phMin: 6.5,
       phMax: 8.2,
+      saltThreshold: 2.0,
+      waterloggingSensitive: true,
+      perennialYears: 3,
     ),
 
     CropProfile(
@@ -332,6 +356,8 @@ class CropCatalog {
       secondCrop: true,
       phMin: 6.0,
       phMax: 7.8,
+      saltThreshold: 1.0,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'peanut',
@@ -351,6 +377,8 @@ class CropCatalog {
       nitrogenFixing: true,
       phMin: 5.8,
       phMax: 7.8,
+      saltThreshold: 3.2,
+      waterloggingSensitive: true,
     ),
     CropProfile(
       id: 'carrot',
@@ -371,6 +399,8 @@ class CropCatalog {
       secondCrop: true,
       phMin: 6.0,
       phMax: 7.8,
+      saltThreshold: 1.0,
+      waterloggingSensitive: true,
     ),
 
     // Покровные (промежуточные) культуры.
@@ -393,6 +423,7 @@ class CropCatalog {
       nitrogenFixing: true,
       forage: true,
       isCover: true,
+      saltThreshold: 3.0,
     ),
     CropProfile(
       id: 'rye',
@@ -412,6 +443,7 @@ class CropCatalog {
       rootDepth: 3,
       forage: true,
       isCover: true,
+      saltThreshold: 11.4,
     ),
     CropProfile(
       id: 'pea',

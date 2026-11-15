@@ -45,6 +45,15 @@ English interfaces, and calibration against recorded yields.
 - Flags bare-field months, the driest months, frost months and significant
   climate trends for the field.
 - Offers a "what if" scenario with rainfall and temperature sliders.
+- Builds 3-, 4- or 5-year rotations, keeps alfalfa as a multi-year block and
+  never brings the same crop back sooner than three years.
+- Corrects temperature for the field's elevation relative to the NASA grid
+  cell and gives frost dates with probability and sowing dates to the decade
+  from daily NASA POWER data.
+- Takes salinity, groundwater depth and soil nutrients from the farmer and
+  checks crops against FAO salt-tolerance thresholds.
+- Shows income in money when the farmer enters prices, yields and costs, and
+  compares recorded yields with the advisor's score for the same year.
 - Turns a plain-language field observation ("leaves are yellowing, soil is
   dry") into structured facts with sources, flags missing data and
   contradictions, and proposes a cautious next step with a plan.
@@ -87,10 +96,11 @@ The three core models are pure Dart and add no download; the language model is
 an optional 491 MB download.
 
 ### Validity and limitations
-- 92 automated tests cover scoring, the models, the language-model guards, the
-  observation interpreter (16-phrase evaluation set), validator, decision
-  rules, lifecycle, NASA response parsing (real responses saved as fixtures)
-  and database migrations.
+- 133 automated tests cover scoring, the models, the language-model guards,
+  the observation interpreter (32-phrase evaluation set written by the team),
+  validator, decision rules, lifecycle, NASA response parsing (real responses
+  saved as fixtures), frost dates, salinity, income, calibration and database
+  migrations.
 - The observation rules were written by the team, are intentionally limited to
   "measure / check / consult", and have not been reviewed by an agronomist.
 - The language model has been run in the iOS Simulator only; its Russian is
@@ -98,9 +108,10 @@ an optional 491 MB download.
 - Verified in the iOS Simulator with real NASA data for a field near Khujand.
 - Not yet validated against measured yields or reviewed by an agronomist; crop
   parameters are generalized reference values chosen by the team.
-- Climate is a ~50 km grid cell and calculations use monthly steps.
-- Market value is a 1–5 index, not prices. Salinity, groundwater and nutrients
-  are not in the data.
+- Climate is a ~50 km grid cell; elevation is corrected, other microclimate is
+  not. The engine works in monthly steps; sowing dates are refined to decades.
+- No built-in prices: money income needs the farmer's own numbers. Soil data
+  comes from the farmer; salt thresholds are approximate.
 - SMAP, GPM and MODIS appear as map layers; the numeric analysis uses NASA
   POWER and SRTM.
 
@@ -128,7 +139,9 @@ an optional 491 MB download.
 - **NASA POWER** (https://power.larc.nasa.gov/) — climatology and 1991–2025
   monthly series of temperature, temperature range, precipitation, frost days
   and root-zone soil wetness. Feeds the water balance, sowing windows, year-type
-  model and trends.
+  model and trends. Daily minimum and mean temperature (1991–2025) feed frost
+  dates and sowing to the decade; the grid-cell elevation feeds the elevation
+  correction.
 - **SRTM** elevation (https://www.earthdata.nasa.gov/data/instruments/srtm) —
   elevation and slope of the field; feeds the erosion-risk term.
 - **MODIS Terra NDVI (16-day)** via NASA GIBS — vegetation layer on the map.
@@ -145,6 +158,8 @@ an optional 491 MB download.
 - OpenStreetMap (https://www.openstreetmap.org/copyright) — base map, ODbL.
 - FAO Irrigation and Drainage Paper 56 — Hargreaves ET0 and crop-coefficient
   method.
+- FAO Irrigation and Drainage Paper 29 (Ayers & Westcot, 1985) and
+  Maas–Hoffman — approximate crop salt-tolerance thresholds.
 - Qwen2.5-0.5B-Instruct-GGUF
   (https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) — Apache 2.0,
   optional on-device language model.

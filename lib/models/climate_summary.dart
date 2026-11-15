@@ -38,6 +38,9 @@ class ClimateSummary {
   /// Период климатологии, как его описывает источник.
   final String period;
 
+  /// Средняя высота ячейки NASA POWER, м — для поправки на высоту поля.
+  final double? gridElevation;
+
   final DateTime fetchedAt;
 
   const ClimateSummary({
@@ -51,6 +54,7 @@ class ClimateSummary {
     this.rootWetness,
     required this.period,
     required this.fetchedAt,
+    this.gridElevation,
   });
 
   double get annualPrecipMm => precipMm.reduce((a, b) => a + b);
@@ -112,12 +116,15 @@ class ClimateSummary {
       precipMm: precipMm.map((p) => p * rainFactor).toList(),
       // Грубая поправка: потепление на 1 °C убирает около 15% дней
       // с заморозками. Это допущение сценария, а не прогноз.
-      frostDays: frostDays
-          .map((d) => math.max(d * (1 - 0.15 * tempDelta), 0.0))
-          .toList(),
+      frostDays: [
+        for (var month = 0; month < 12; month++)
+          (frostDays[month] * (1 - 0.15 * tempDelta))
+              .clamp(0.0, daysInMonth[month].toDouble()),
+      ],
       rootWetness: rootWetness,
       period: period,
       fetchedAt: fetchedAt,
+      gridElevation: gridElevation,
     );
   }
 
@@ -179,7 +186,18 @@ class ClimateSummary {
       rootWetness: series('GWETROOT'),
       period: header?['range'] as String? ?? '',
       fetchedAt: fetchedAt,
+      gridElevation: gridElevationOf(json),
     );
+  }
+
+  /// Высота ячейки из ответа NASA POWER: третья координата точки.
+  static double? gridElevationOf(Map<String, dynamic> json) {
+    final geometry = json['geometry'] as Map<String, dynamic>?;
+    final coordinates = geometry?['coordinates'] as List?;
+    if (coordinates == null || coordinates.length < 3) {
+      return null;
+    }
+    return (coordinates[2] as num?)?.toDouble();
   }
 
   Map<String, dynamic> toJson() {
@@ -194,6 +212,7 @@ class ClimateSummary {
       'rootWetness': rootWetness,
       'period': period,
       'fetchedAt': fetchedAt.toIso8601String(),
+      'gridElevation': gridElevation,
     };
   }
 
@@ -213,6 +232,7 @@ class ClimateSummary {
       rootWetness: json['rootWetness'] == null ? null : list('rootWetness'),
       period: json['period'] as String? ?? '',
       fetchedAt: DateTime.parse(json['fetchedAt'] as String),
+      gridElevation: (json['gridElevation'] as num?)?.toDouble(),
     );
   }
 

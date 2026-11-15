@@ -238,13 +238,20 @@ class FarmAssistant {
             'Нет климатических данных',
           );
         }
+        final daily = result.daily;
+        String sowing(CropFit f) {
+          final window = daily?.sowingWindow(f.crop, f.startMonth!);
+          return window == null
+              ? ClimateSummary.monthNames[f.startMonth!]
+              : 'с ${window.decade}';
+        }
+
         return reply(
           'По многолетнему климату участка:\n'
-          '${dated.map((f) => '• ${f.crop.name}: посев — '
-              '${ClimateSummary.monthNames[f.startMonth!]}, уборка — '
-              '${ClimateSummary.monthNames[f.months.last]}').join('\n')}\n\n'
-          'Сроки рассчитаны с точностью до месяца — точную дату уточните '
-          'по погоде и у агронома.',
+          '${dated.map((f) => '• ${f.crop.name}: посев — ${sowing(f)}, '
+              'уборка — ${ClimateSummary.monthNames[f.months.last]}').join('\n')}\n\n'
+          '${daily == null ? 'Сроки рассчитаны с точностью до месяца' : 'Сроки по суточным данным NASA: прогрев почвы и риск заморозка не выше 10%'}'
+          ' — точную дату уточните по погоде и у агронома.',
           source,
         );
 

@@ -15,37 +15,59 @@ class ObservationInterpreter {
   const ObservationInterpreter();
 
   /// Корни слов для однозначных признаков. Слово совпадает, если
-  /// начинается с корня.
+  /// начинается с корня; корень с «=» должен совпасть со словом целиком
+  /// (короткие таджикские слова, чтобы не путать с русскими). Длинные
+  /// корни допускают одну опечатку.
+  ///
+  /// Таджикские слова добавлены разработчиками и требуют проверки
+  /// носителем языка.
   static const Map<ObservationAttribute, Map<String, List<String>>> _lexicon = {
     ObservationAttribute.leaves: {
-      'yellowing': ['желт', 'пожелт'],
-      'wilting': ['вян', 'увяд', 'завял', 'поник'],
-      'spots': ['пятн', 'налет', 'ржавч'],
+      'yellowing': [
+        'желт', 'пожелт', 'жолт', 'бледн', 'посветл', 'хлороз', //
+        '=зард', 'зардшуд', 'зардгашт',
+      ],
+      'wilting': [
+        'вян', 'увяд', 'завял', 'поник', 'скруч', 'скрутил', 'свернул',
+        'сворач', 'обвис', 'пажмурд',
+      ],
+      'spots': [
+        'пятн', 'налет', 'ржавч', 'крапин', 'гнил', 'плесен', 'мучнист',
+        '=доғ',
+      ],
     },
     ObservationAttribute.soil: {
-      'crusted': ['корк'],
+      'crusted': ['корк', 'уплотн'],
     },
     ObservationAttribute.weather: {
-      'hot': ['жар', 'зной', 'пекл'],
-      'cold': ['холод', 'похолод', 'прохлад'],
-      'frost': ['заморозк', 'заморозок', 'мороз', 'иней'],
-      'rain': ['дожд', 'ливн', 'ливен'],
-      'wind': ['ветер', 'ветр', 'суховей'],
+      'hot': ['жар', 'зной', 'пекл', 'духот', 'палит', 'солнцепек', '=гарм',
+          '=гармо', 'гармӣ'],
+      'cold': ['холод', 'похолод', 'прохлад', 'хунук', '=сард'],
+      'frost': ['заморозк', 'заморозок', 'мороз', 'иней', 'сармо', '=ях',
+          'яхбанд'],
+      'rain': ['дожд', 'ливн', 'ливен', 'борон'],
+      'wind': ['ветер', 'ветр', 'суховей', 'ураган', 'шамол'],
     },
     ObservationAttribute.pests: {
-      'present': ['вредител', 'тля', 'тли', 'клещ', 'гусениц', 'жук', 'насеком'],
+      'present': [
+        'вредител', 'тля', 'тли', 'клещ', 'гусениц', 'жук', 'насеком',
+        'долгоносик', 'саранч', 'трипс', 'белокрылк', 'совк', 'медведк',
+        'червец', 'слизн', 'улитк', 'паутин', 'ҳашарот', 'зараррасон',
+        '=кирм',
+      ],
     },
     ObservationAttribute.growth: {
-      'slow': ['отста', 'замедл'],
-      'lodging': ['полег'],
+      'slow': ['отста', 'замедл', 'чахл', 'низкоросл'],
+      'lodging': ['полег', '=легла', '=легли'],
     },
   };
 
   static const List<String> _leafSubjects = [
-    'лист', 'ботв', 'растен', 'куст', 'всход', 'стебл',
+    'лист', 'ботв', 'растен', 'куст', 'всход', 'стебл', 'барг',
   ];
   static const List<String> _soilSubjects = [
-    'почв', 'земл', 'грунт', 'грядк', 'поле', 'поля', 'участ',
+    'почв', 'почьв', 'земл', 'грунт', 'грядк', 'поле', 'поля', 'участ',
+    '=хок', 'хоки', 'замин',
   ];
   static const List<String> _growthSubjects = ['рост', 'раст', 'развит', 'всход'];
 
@@ -53,16 +75,63 @@ class ObservationInterpreter {
   /// части фразы.
   static const List<String> _dryRoots = [
     'сух', 'пересох', 'пересых', 'сохн', 'засох', 'засых', 'усых',
-    'потрескал', 'трещин',
+    'потрескал', 'трещин', 'засух', 'пожух', 'побурел', 'буре', '=хушк',
+    'хушкид', 'хушкшуд',
   ];
-  static const List<String> _dryPlantRoots = ['сохн', 'засох', 'засых', 'усых'];
+  static const List<String> _dryPlantRoots = [
+    'сохн', 'засох', 'засых', 'усых', 'пожух', 'побурел', 'буре', 'хушкид',
+  ];
   static const List<String> _wetRoots = [
-    'мокр', 'сыр', 'переувлажн', 'залит', 'луж', 'болот',
+    'мокр', 'сыр', 'переувлажн', 'залит', 'луж', 'болот', 'затоп', 'подтоп',
+    'заболоч', '=тар', 'намнок',
   ];
-  static const List<String> _healthyRoots = ['здоров', 'зелен'];
-  static const List<String> _weakRoots = ['слаб', 'плохо', 'медлен'];
+  static const List<String> _healthyRoots = ['здоров', 'зелен', 'хорош'];
+  static const List<String> _weakRoots = ['слаб', 'плохо', 'медлен', '=суст'];
 
-  static const Set<String> _negations = {'не', 'нет', 'без', 'ни'};
+  static const Set<String> _negations = {'не', 'нет', 'без', 'ни', 'нест'};
+
+  /// Совпадение слова с корнем. Корни от 6 букв допускают одну опечатку
+  /// (замена, пропуск или лишняя буква в начале слова).
+  static bool matches(String token, String root) {
+    if (root.startsWith('=')) {
+      return token == root.substring(1);
+    }
+    if (token.startsWith(root)) {
+      return true;
+    }
+    if (root.length < 6 || token.length < root.length - 1) {
+      return false;
+    }
+
+    for (final length in [root.length - 1, root.length, root.length + 1]) {
+      if (length <= token.length &&
+          _distance(token.substring(0, length), root) <= 1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool matchesAny(String token, List<String> roots) =>
+      roots.any((root) => matches(token, root));
+
+  /// Расстояние Левенштейна (короткие строки).
+  static int _distance(String a, String b) {
+    var previous = List<int>.generate(b.length + 1, (i) => i);
+    for (var i = 1; i <= a.length; i++) {
+      final current = List<int>.filled(b.length + 1, 0)..[0] = i;
+      for (var j = 1; j <= b.length; j++) {
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+        current[j] = [
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + cost,
+        ].reduce((x, y) => x < y ? x : y);
+      }
+      previous = current;
+    }
+    return previous[b.length];
+  }
 
   static const List<String> _hedges = [
     'кажет', 'вроде', 'похоже', 'наверн', 'возможн', 'может', 'видимо',
@@ -100,7 +169,7 @@ class ObservationInterpreter {
       final tokens = clause.split(' ');
 
       bool any(List<String> roots) =>
-          tokens.any((token) => roots.any(token.startsWith));
+          tokens.any((token) => matchesAny(token, roots));
 
       void add(ObservationAttribute attribute, String value) {
         final exists = facts.any(
@@ -138,7 +207,7 @@ class ObservationInterpreter {
 
       for (var index = 0; index < tokens.length; index++) {
         final token = tokens[index];
-        bool starts(List<String> roots) => roots.any(token.startsWith);
+        bool starts(List<String> roots) => matchesAny(token, roots);
 
         _lexicon.forEach((attribute, values) {
           values.forEach((value, roots) {
@@ -309,7 +378,7 @@ class ObservationInterpreter {
       _ => const <String>[],
     };
     return TextFeatures.tokens(text).any(
-      (token) => roots.any(token.startsWith),
+      (token) => matchesAny(token, roots),
     );
   }
 

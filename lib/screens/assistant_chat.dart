@@ -354,10 +354,32 @@ class _ModelBanner extends StatelessWidget {
         title = 'Языковая модель не скачана';
         subtitle = llm.error ??
             'Без неё ответы точные, но шаблонные. ${LocalLlm.modelName}, '
-                'около ${LocalLlm.approxSizeMb} МБ, нужен интернет один раз.';
-        action = TextButton(
-          onPressed: llm.download,
-          child: const Text('Скачать'),
+                'около ${LocalLlm.approxSizeMb} МБ: скачайте или возьмите '
+                'файл с другого телефона.';
+        action = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: llm.download,
+              child: const Text('Скачать'),
+            ),
+            TextButton(
+              onPressed: llm.importFromFile,
+              child: const Text('Из файла'),
+            ),
+          ],
+        );
+      case LlmStatus.verifying:
+        title = 'Проверка файла модели';
+        subtitle = 'Сверяем размер и контрольную сумму с официальным файлом…';
+        action = const Padding(
+          padding: EdgeInsets.all(12),
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
         );
       case LlmStatus.downloading:
         title = 'Скачивание модели: ${(llm.progress * 100).round()}%';
@@ -374,10 +396,20 @@ class _ModelBanner extends StatelessWidget {
             ? 'Загружается в память…'
             : '${LocalLlm.modelName} поясняет ответы простыми словами. '
                 'Работает без сети.';
-        action = IconButton(
-          tooltip: 'Удалить модель с устройства',
-          onPressed: status == LlmStatus.loading ? null : llm.delete,
-          icon: const Icon(Icons.delete_outline),
+        action = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Передать модель на другой телефон',
+              onPressed: llm.share,
+              icon: const Icon(Icons.ios_share),
+            ),
+            IconButton(
+              tooltip: 'Удалить модель с устройства',
+              onPressed: status == LlmStatus.loading ? null : llm.delete,
+              icon: const Icon(Icons.delete_outline),
+            ),
+          ],
         );
     }
 

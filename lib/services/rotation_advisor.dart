@@ -4,10 +4,14 @@ import '../ai/climate_pattern_model.dart';
 import '../data/crop_catalog.dart';
 import '../data/region_profile.dart';
 import '../models/climate_summary.dart';
+import '../models/crop_economics.dart';
 import '../models/crop_profile.dart';
+import '../models/daily_climate.dart';
+import '../models/elevation_correction.dart';
 import '../models/farmer_priorities.dart';
 import '../models/field.dart';
 import '../models/site_conditions.dart';
+import '../models/soil_profile.dart';
 import '../models/terrain_info.dart';
 
 /// Как культура вписывается в климат участка.
@@ -61,11 +65,45 @@ class RotationYear {
   final CropFit main;
   final CropFit? cover;
 
-  const RotationYear({required this.main, this.cover});
+  /// Многолетняя культура стоит с прошлого года (второй и далее год).
+  final bool established;
+
+  /// Многолетняя культура останется и на следующий год.
+  final bool continues;
+
+  const RotationYear({
+    required this.main,
+    this.cover,
+    this.established = false,
+    this.continues = false,
+  });
+
+  RotationYear withMain(CropFit value, {CropFit? cover}) {
+    return RotationYear(
+      main: value,
+      cover: cover,
+      established: established,
+      continues: continues,
+    );
+  }
 
   /// Месяцев в году, когда поле остаётся без растительного покрова.
   int get bareMonths {
-    final covered = main.crop.cycleMonths + (cover?.crop.cycleMonths ?? 0);
+    final start = main.startMonth;
+    final cycle = main.crop.cycleMonths;
+
+    // Многолетняя культура зимует на поле и закрывает почву.
+    if (established && continues) {
+      return 0;
+    }
+    if (established) {
+      return start == null ? (12 - cycle).clamp(0, 12) : (12 - math.min(12, start + cycle));
+    }
+    if (continues) {
+      return start ?? 0;
+    }
+
+    final covered = cycle + (cover?.crop.cycleMonths ?? 0);
     return (12 - covered).clamp(0, 12);
   }
 
@@ -149,6 +187,13 @@ class RotationStrategy {
   /// (пусто, пока модель типов лет не обучена).
   final List<YearTypeOutcome> yearOutcomes;
 
+  /// Средний доход (выручка минус затраты) с гектара в год, если для всех
+  /// культур стратегии введены цена, урожайность и затраты.
+  final double? marginPerHa;
+
+  /// Культуры без экономических данных: для них доход — индекс 1–5.
+  final List<String> missingEconomics;
+
   const RotationStrategy({
     required this.kind,
     required this.title,
@@ -162,6 +207,8 @@ class RotationStrategy {
     required this.risks,
     this.irrigationEfficiency = 1,
     this.yearOutcomes = const [],
+    this.marginPerHa,
+    this.missingEconomics = const [],
   });
 
   /// Сколько воды нужно подать на поле с учётом потерь при поливе, мм/год.
@@ -176,15 +223,46 @@ class RotationStrategy {
       years.map((y) => y.bareMonths).reduce((a, b) => a + b) / years.length;
 
   String get sequenceLabel {
-    return years.map((year) {
+    final parts = <String>[];
+
+    for (var i = 0; i < years.length; i++) {
+      final year = years[i];
+      if (year.established && i > 0) {
+        continue;
+      }
+
+      if (year.continues) {
+        var length = 1;
+        while (i + length < years.length && years[i + length].established) {
+          length++;
+        }
+        parts.add('${year.main.crop.name} (${yearsLabel(length)})');
+        continue;
+      }
+
       final cover = year.cover;
       if (cover == null) {
-        return year.main.crop.name;
+        parts.add(year.main.crop.name);
+      } else {
+        parts.add(
+          cover.crop.isCover
+              ? '${year.main.crop.name} + ${cover.crop.name}'
+              : '${year.main.crop.name} + ${cover.crop.name} повторно',
+        );
       }
-      return cover.crop.isCover
-          ? '${year.main.crop.name} + ${cover.crop.name}'
-          : '${year.main.crop.name} + ${cover.crop.name} повторно';
-    }).join(' → ');
+    }
+
+    return parts.join(' → ');
+  }
+
+  static String yearsLabel(int count) {
+    if (count % 10 == 1 && count % 100 != 11) {
+      return '$count год';
+    }
+    if ([2, 3, 4].contains(count % 10) && !(count % 100 >= 12 && count % 100 <= 14)) {
+      return '$count года';
+    }
+    return '$count лет';
   }
 }
 
@@ -198,6 +276,14 @@ class AdvisorResult {
   /// Регион, под который подобран набор культур (если определён).
   final RegionProfile? region;
 
+  /// Поправка температуры на высоту поля (если известны обе высоты).
+  final ElevationCorrection? elevation;
+
+  /// Суточный климат с поправками — для сроков посева и заморозков.
+  final DailyClimate? daily;
+
+  final String currency;
+
   /// Первая — текущий севооборот, далее альтернативы по убыванию оценки.
   final List<RotationStrategy> strategies;
 
@@ -206,6 +292,9 @@ class AdvisorResult {
     this.insights = const [],
     this.region,
     this.strategies = const [],
+    this.elevation,
+    this.daily,
+    this.currency = 'у. е.',
   });
 
   RotationStrategy? get best {
@@ -223,7 +312,14 @@ class AdvisorResult {
 /// Это инструмент поддержки решения, а не замена агронома.
 class RotationAdvisor {
 
-  static const int rotationLength = 3;
+  /// Полный перебор, пока вариантов не больше этого; дальше — лучевой поиск.
+  static const int exhaustiveLimit = 6000;
+
+  /// Сколько частичных вариантов хранит лучевой поиск на каждом шаге.
+  static const int beamWidth = 40;
+
+  /// Доля урожая повторной культуры от урожая основного посева.
+  static const double secondCropYieldShare = 0.6;
 
   const RotationAdvisor();
 
@@ -234,16 +330,34 @@ class RotationAdvisor {
     FarmerPriorities priorities = const FarmerPriorities(),
     ClimatePatterns? patterns,
     TerrainInfo? terrain,
+    SoilProfile? soil,
+    Map<String, CropEconomics> economics = const {},
+    DailyClimate? daily,
   }) {
     final current = _currentRotation(field, historyCropIds);
-    final site = SiteConditions.of(field, terrain: terrain);
+    final site = SiteConditions.of(field, terrain: terrain, soil: soil);
+    final region = RegionProfile.detect(field);
+    final currency = region?.currency ?? 'у. е.';
 
     if (current.isEmpty) {
-      return const AdvisorResult(
+      return AdvisorResult(
         blocker: 'Для этого участка не указана полевая культура из '
             'справочника. Добавьте историю культур за последние годы — '
             'и советник сравнит севообороты.',
+        currency: currency,
       );
+    }
+
+    // Ячейка NASA около 50 км: в горах её средняя высота может сильно
+    // отличаться от высоты поля. Температура поправляется на разницу.
+    final elevation = ElevationCorrection.of(
+      fieldElevation: terrain?.elevation ?? field.elevation,
+      gridElevation: climate?.gridElevation ?? daily?.gridElevation,
+    );
+    if (elevation != null && elevation.significant) {
+      climate = climate?.adjusted(tempDelta: elevation.deltaT);
+      patterns = patterns?.withTempDelta(elevation.deltaT);
+      daily = daily?.withTempDelta(elevation.deltaT);
     }
 
     final rainfed = field.irrigation == 'Без орошения';
@@ -257,30 +371,39 @@ class RotationAdvisor {
         ),
     };
 
-    final currentYears = [
-      for (final crop in current) RotationYear(main: fits[crop.id]!),
-    ];
+    final money = _Money.of(economics);
+    final currentYears = _yearsOf(current, fits);
 
-    final region = RegionProfile.detect(field);
     bool inRegion(CropProfile crop) =>
         region == null || region.cropIds.contains(crop.id);
 
     final anchor = current.last;
     final pool = CropCatalog.mainCrops.where((crop) {
-      return inRegion(crop) && _isViable(fits[crop.id]!, rainfed);
+      return inRegion(crop) &&
+          _isViable(fits[crop.id]!, rainfed) &&
+          site.siteFit(crop) >= 0.5;
     }).toList();
-
-    // Что можно посеять в свободные месяцы года: покровные культуры
-    // и повторные (второй урожай после ранней уборки).
-    final covers = CropCatalog.coverCrops.where(inRegion).toList();
-    final seconds = CropCatalog.mainCrops
-        .where((crop) => crop.secondCrop && inRegion(crop))
-        .toList();
     if (!pool.contains(anchor)) {
       pool.add(anchor);
     }
 
-    final candidates = _candidates(pool, anchor, current);
+    // Что можно посеять в свободные месяцы года: покровные культуры
+    // и повторные (второй урожай после ранней уборки).
+    final covers = CropCatalog.coverCrops
+        .where((crop) => inRegion(crop) && site.siteFit(crop) >= 0.5)
+        .toList();
+    final seconds = CropCatalog.mainCrops
+        .where(
+          (crop) =>
+              crop.secondCrop && inRegion(crop) && site.siteFit(crop) >= 0.5,
+        )
+        .toList();
+
+    final length = priorities.rotationYears.clamp(3, 5);
+    final exhaustive =
+        math.pow(pool.length, length - 1) <= exhaustiveLimit;
+    final all = exhaustive ? _enumerate(pool, anchor, length) : null;
+
     final picked = <StrategyKind, List<RotationYear>>{};
     final usedKeys = <String>{_key(current)};
 
@@ -290,89 +413,233 @@ class RotationAdvisor {
       StrategyKind.incomeResilience,
     ]) {
       final themed = _themeWeights(kind, priorities);
-      List<RotationYear>? bestYears;
-      double bestScore = -1;
+      final memo = <String, CropFit?>{};
+
+      List<RotationYear> build(List<CropProfile> sequence) {
+        final years = _yearsOf(sequence, fits);
+        if (climate == null) {
+          return years;
+        }
+        if (kind == StrategyKind.soilBuilding) {
+          return _withCatchCrops(
+            years,
+            climate,
+            [...covers, ...seconds.where((c) => c.nitrogenFixing)],
+            rainfed: rainfed,
+            site: site,
+            forIncome: false,
+            memo: memo,
+          );
+        }
+        if (kind == StrategyKind.incomeResilience) {
+          return _withCatchCrops(
+            years,
+            climate,
+            seconds,
+            rainfed: rainfed,
+            site: site,
+            forIncome: true,
+            memo: memo,
+          );
+        }
+        return years;
+      }
+
+      double score(List<CropProfile> sequence) =>
+          _score(build(sequence), field, site, money).weighted(themed);
+
+      // Культура не возвращается на поле раньше чем через три года —
+      // это агрономическое правило, а не предпочтение, поэтому варианты
+      // с нарушением не предлагаются.
+      bool allowed(List<CropProfile> sequence, {bool complete = true}) =>
+          _shortReturns(_yearsOf(sequence, fits), cyclic: complete).isEmpty;
+
+      final candidates = all ??
+          _beamSearch(
+            pool,
+            anchor,
+            length,
+            score: score,
+            exclude: usedKeys,
+            allowed: (sequence) => allowed(sequence, complete: false),
+          );
+
+      List<CropProfile>? best;
+      var bestScore = -1.0;
       String? bestKey;
 
       for (final sequence in candidates) {
         final key = _key(sequence);
-        if (usedKeys.contains(key)) {
+        if (usedKeys.contains(key) || !allowed(sequence)) {
           continue;
         }
-
-        var years = [
-          for (final crop in sequence) RotationYear(main: fits[crop.id]!),
-        ];
-        if (climate != null) {
-          if (kind == StrategyKind.soilBuilding) {
-            years = _withCatchCrops(
-              years,
-              climate,
-              [...covers, ...seconds.where((c) => c.nitrogenFixing)],
-              rainfed: rainfed,
-              site: site,
-              forIncome: false,
-            );
-          } else if (kind == StrategyKind.incomeResilience) {
-            years = _withCatchCrops(
-              years,
-              climate,
-              seconds,
-              rainfed: rainfed,
-              site: site,
-              forIncome: true,
-            );
-          }
+        if (_shortReturns(build(sequence)).isNotEmpty) {
+          continue;
         }
-
-        final score = _score(years, field, site).weighted(themed);
-        if (score > bestScore) {
-          bestScore = score;
-          bestYears = years;
+        final value = score(sequence);
+        if (value > bestScore) {
+          bestScore = value;
+          best = sequence;
           bestKey = key;
         }
       }
 
-      if (bestYears != null) {
-        picked[kind] = bestYears;
+      if (best != null) {
+        picked[kind] = build(best);
         usedKeys.add(bestKey!);
       }
     }
 
-    final currentStrategy = _describe(
-      kind: StrategyKind.current,
-      years: currentYears,
-      field: field,
-      climate: climate,
-      rainfed: rainfed,
-      priorities: priorities,
-      baseline: null,
-      region: region,
-      site: site,
-      patterns: patterns,
-    );
+    RotationStrategy describe(
+      StrategyKind kind,
+      List<RotationYear> years,
+      RotationStrategy? baseline,
+    ) {
+      return _describe(
+        kind: kind,
+        years: years,
+        field: field,
+        climate: climate,
+        rainfed: rainfed,
+        priorities: priorities,
+        baseline: baseline,
+        region: region,
+        site: site,
+        patterns: patterns,
+        money: money,
+        currency: currency,
+        daily: daily,
+        elevation: elevation,
+      );
+    }
+
+    final currentStrategy =
+        describe(StrategyKind.current, currentYears, null);
 
     final alternatives = [
       for (final entry in picked.entries)
-        _describe(
-          kind: entry.key,
-          years: entry.value,
-          field: field,
-          climate: climate,
-          rainfed: rainfed,
-          priorities: priorities,
-          baseline: currentStrategy,
-          region: region,
-          site: site,
-          patterns: patterns,
-        ),
+        describe(entry.key, entry.value, currentStrategy),
     ]..sort((a, b) => b.total.compareTo(a.total));
 
     return AdvisorResult(
-      insights: _insights(field, climate, currentYears, site, patterns),
+      insights: _insights(
+        field,
+        climate,
+        currentYears,
+        site,
+        patterns,
+        daily: daily,
+        elevation: elevation,
+      ),
       region: region,
       strategies: [currentStrategy, ...alternatives],
+      elevation: elevation,
+      daily: daily,
+      currency: currency,
     );
+  }
+
+  /// Годы севооборота с отметками многолетних культур.
+  List<RotationYear> _yearsOf(
+    List<CropProfile> sequence,
+    Map<String, CropFit> fits,
+  ) {
+    return [
+      for (var i = 0; i < sequence.length; i++)
+        RotationYear(
+          main: fits[sequence[i].id]!,
+          established: sequence[i].isPerennial &&
+              i > 0 &&
+              sequence[i - 1].id == sequence[i].id,
+          continues: sequence[i].isPerennial &&
+              i + 1 < sequence.length &&
+              sequence[i + 1].id == sequence[i].id,
+        ),
+    ];
+  }
+
+  /// Шаги, которыми можно продолжить последовательность: одна культура на
+  /// год или многолетняя культура блоком на 2…её срок лет.
+  Iterable<List<CropProfile>> _steps(
+    List<CropProfile> pool,
+    int remaining,
+  ) sync* {
+    for (final crop in pool) {
+      if (!crop.isPerennial) {
+        yield [crop];
+        continue;
+      }
+      final longest = math.min(crop.perennialYears, remaining);
+      for (var block = 2; block <= longest; block++) {
+        yield List.filled(block, crop);
+      }
+    }
+  }
+
+  /// Все последовательности длины [length], начинающиеся с культуры
+  /// фермера: предлагаем доработать его севооборот, а не отказаться от него.
+  List<List<CropProfile>> _enumerate(
+    List<CropProfile> pool,
+    CropProfile anchor,
+    int length,
+  ) {
+    var partial = <List<CropProfile>>[
+      [anchor],
+    ];
+    final complete = <List<CropProfile>>[];
+
+    while (partial.isNotEmpty) {
+      final next = <List<CropProfile>>[];
+      for (final sequence in partial) {
+        for (final step in _steps(pool, length - sequence.length)) {
+          final extended = [...sequence, ...step];
+          if (extended.length == length) {
+            complete.add(extended);
+          } else {
+            next.add(extended);
+          }
+        }
+      }
+      partial = next;
+    }
+
+    return complete;
+  }
+
+  /// Лучевой поиск для длинных севооборотов: на каждом шаге остаются
+  /// [beamWidth] лучших частичных вариантов по оценке темы.
+  List<List<CropProfile>> _beamSearch(
+    List<CropProfile> pool,
+    CropProfile anchor,
+    int length, {
+    required double Function(List<CropProfile>) score,
+    required Set<String> exclude,
+    required bool Function(List<CropProfile>) allowed,
+  }) {
+    var beam = <List<CropProfile>>[
+      [anchor],
+    ];
+    final complete = <List<CropProfile>>[];
+
+    while (beam.isNotEmpty) {
+      final scored = <(List<CropProfile>, double)>[];
+      for (final sequence in beam) {
+        for (final step in _steps(pool, length - sequence.length)) {
+          final extended = [...sequence, ...step];
+          if (extended.length == length) {
+            if (!exclude.contains(_key(extended))) {
+              complete.add(extended);
+            }
+          } else if (allowed(extended)) {
+            scored.add((extended, score(extended)));
+          }
+        }
+      }
+      scored.sort((a, b) => b.$2.compareTo(a.$2));
+      beam = [for (final item in scored.take(beamWidth)) item.$1];
+    }
+
+    return complete;
   }
 
   // ----------------------------------------
@@ -529,24 +796,6 @@ class RotationAdvisor {
     return fromField == null ? const [] : [fromField];
   }
 
-  /// Все трёхлетние последовательности, начинающиеся с опорной культуры
-  /// фермера: предлагаем доработать его севооборот, а не отказаться от него.
-  List<List<CropProfile>> _candidates(
-    List<CropProfile> pool,
-    CropProfile anchor,
-    List<CropProfile> current,
-  ) {
-    final result = <List<CropProfile>>[];
-
-    for (final second in pool) {
-      for (final third in pool) {
-        result.add([anchor, second, third]);
-      }
-    }
-
-    return result;
-  }
-
   /// Ключ, одинаковый для циклических сдвигов одной последовательности.
   String _key(List<CropProfile> sequence) {
     final ids = sequence.map((crop) => crop.id).toList();
@@ -603,12 +852,41 @@ class RotationAdvisor {
     required bool rainfed,
     required SiteConditions site,
     required bool forIncome,
+    Map<String, CropFit?>? memo,
   }) {
     final result = <RotationYear>[];
 
     for (var i = 0; i < years.length; i++) {
       final year = years[i];
       final next = years[(i + 1) % years.length];
+
+      // Многолетняя культура занимает поле весь год.
+      if (year.main.crop.isPerennial) {
+        result.add(year);
+        continue;
+      }
+
+      // Культуры в пределах двух лет от этого: повторная культура не должна
+      // совпадать с ними, иначе вернётся на поле слишком рано.
+      final nearby = <String>{
+        for (var offset = -(minReturnYears - 1);
+            offset <= minReturnYears - 1;
+            offset++)
+          years[(i + offset) % years.length].main.crop.id,
+        for (var offset = 1; offset < minReturnYears && i - offset >= 0; offset++)
+          if (result[i - offset].cover != null &&
+              !result[i - offset].cover!.crop.isCover)
+            result[i - offset].cover!.crop.id,
+      };
+
+      // Выбор зависит только от культур вокруг этого года.
+      final key = '${year.main.crop.id}>${next.main.crop.id}|'
+          '${(nearby.toList()..sort()).join(',')}';
+      if (memo != null && memo.containsKey(key)) {
+        result.add(year.withMain(year.main, cover: memo[key]));
+        continue;
+      }
+
       final free = {
         for (var month = 0; month < 12; month++)
           if (!year.main.months.contains(month)) month,
@@ -623,6 +901,11 @@ class RotationAdvisor {
         final sameFamilySecond =
             !cover.isCover && cover.family == year.main.crop.family;
         if (cover.cycleMonths > free.length || sameFamilySecond) {
+          continue;
+        }
+        if (!cover.isCover &&
+            (nearby.contains(cover.id) ||
+                cover.family == next.main.crop.family)) {
           continue;
         }
 
@@ -665,7 +948,8 @@ class RotationAdvisor {
         }
       }
 
-      result.add(RotationYear(main: year.main, cover: bestCover));
+      memo?[key] = bestCover;
+      result.add(year.withMain(year.main, cover: bestCover));
     }
 
     return result;
@@ -679,6 +963,7 @@ class RotationAdvisor {
     List<RotationYear> years,
     Field field,
     SiteConditions site,
+    _Money money,
   ) {
     final rainfed = site.rainfed;
     final n = years.length;
@@ -722,57 +1007,71 @@ class RotationAdvisor {
         ? 1.0
         : mean((y) => _phOk(y.main.crop, ph) ? 1.0 : 0.0);
 
-    final texture = mean((y) => site.textureFit(y.main.crop));
+    final siteFit = mean((y) => site.siteFit(y.main.crop));
 
     // На склоне голое поле смывается: штраф растёт с уклоном.
     final erosion = site.erosionFactor * mean((y) => y.bareMonths / 12);
 
+    // При бедной азотом или гумусом почве (по данным фермера) азот
+    // и органика весят больше.
+    final nWeight = site.nitrogenWeight;
+    final oWeight = site.organicWeight;
+    final weightSum = nWeight + oWeight + 0.25 + 0.1 + 0.05 + 0.05;
+
     final soil = (100 *
-            (0.3 * nitrogen +
-                0.25 * organic +
-                0.25 * cover +
-                0.1 * roots +
-                0.05 * phFit +
-                0.05 * texture) -
-        25 * erosion)
+                (nWeight * nitrogen +
+                    oWeight * organic +
+                    0.25 * cover +
+                    0.1 * roots +
+                    0.05 * phFit +
+                    0.05 * siteFit) /
+                weightSum -
+            25 * erosion)
         .clamp(0.0, 100.0);
 
-    // Разрыв циклов вредителей: одно семейство подряд — плохо.
-    var repeats = 0;
-    for (var i = 0; i < n; i++) {
-      if (years[i].main.crop.family == years[(i + 1) % n].main.crop.family) {
-        repeats++;
-      }
-    }
+    // Разрыв циклов вредителей: одно семейство подряд — плохо. Годы одной
+    // посадки многолетней культуры повтором не считаются.
+    final repeats = _familyRepeats(years);
     final families = years.map((y) => y.main.crop.family).toSet().length;
     final diversity = n > 1 ? (families - 1) / (n - 1) : 0.0;
-    final pestBreak = 100 * (0.7 * (1 - repeats / n) + 0.3 * diversity);
+    final returns = _shortReturns(years).length;
+    final pestBreak = 100 *
+        (0.6 * (1 - repeats / n) +
+            0.25 * diversity +
+            0.15 * (1 - (returns / n).clamp(0.0, 1.0)));
 
-    // Устойчивость: соответствие климату и засухоустойчивость.
+    // Устойчивость: соответствие климату, участку и засухоустойчивость.
     double climateFit(RotationYear y) {
       final fit = y.main;
+      final local = site.siteFit(fit.crop);
       if (!rainfed) {
-        return fit.suitability;
+        return fit.suitability * local;
       }
       final penalty = fit.waterStress * (6 - fit.crop.droughtTolerance) / 5;
-      return fit.suitability * (1 - penalty).clamp(0.0, 1.0);
+      return fit.suitability * local * (1 - penalty).clamp(0.0, 1.0);
     }
 
     final resilience = 100 *
         (0.7 * mean(climateFit) +
             0.3 * mean((y) => y.main.crop.droughtTolerance / 5));
 
-    // Доход: рыночная ценность с поправкой на то, вырастет ли культура.
-    // Повторная культура добавляет половину своей ценности (второй урожай
-    // обычно меньше основного).
+    // Доход: если фермер ввёл цену, урожайность и затраты — маржа
+    // в деньгах относительно лучшей культуры; иначе — рыночный индекс 1–5.
+    // В обоих случаях урожай снижается, если культуре не подходит климат
+    // или участок.
     final income = 100 *
         mean((y) {
+          var value = money.yearValue(y.main.crop, climateFit(y));
+
           final second = y.cover;
-          final extra = second == null || second.crop.isCover
-              ? 0.0
-              : 0.5 * second.crop.marketValue / 5 * second.suitability;
-          return (y.main.crop.marketValue / 5 * climateFit(y) + extra)
-              .clamp(0.0, 1.0);
+          if (second != null && !second.crop.isCover) {
+            value += money.yearValue(
+              second.crop,
+              second.suitability * site.siteFit(second.crop),
+              share: secondCropYieldShare,
+            );
+          }
+          return value.clamp(0.0, 1.0);
         });
 
     return StrategyScores(
@@ -786,6 +1085,80 @@ class RotationAdvisor {
 
   bool _phOk(CropProfile crop, double ph) =>
       ph >= crop.phMin && ph <= crop.phMax;
+
+  /// Минимальный перерыв, лет, прежде чем культура вернётся на поле.
+  static const int minReturnYears = 3;
+
+  /// Культуры, которые возвращаются на поле раньше [minReturnYears] лет
+  /// (по кругу севооборота). Учитываются и повторные посевы; годы одной
+  /// посадки многолетней культуры не считаются.
+  List<CropProfile> _shortReturns(
+    List<RotationYear> years, {
+    bool cyclic = true,
+  }) {
+    final n = years.length;
+    if (n == 1) {
+      return cyclic ? [years.first.main.crop] : const [];
+    }
+
+    final occurrences = <(int, CropProfile, bool)>[
+      for (var i = 0; i < n; i++) ...[
+        (i, years[i].main.crop, true),
+        if (years[i].cover != null && !years[i].cover!.crop.isCover)
+          (i, years[i].cover!.crop, false),
+      ],
+    ];
+
+    final result = <CropProfile>[];
+    for (var a = 0; a < occurrences.length; a++) {
+      for (var b = a + 1; b < occurrences.length; b++) {
+        final (i, crop, mainA) = occurrences[a];
+        final (j, other, mainB) = occurrences[b];
+        if (crop.id != other.id) {
+          continue;
+        }
+
+        if (mainA && mainB && crop.isPerennial) {
+          var sameBlock = true;
+          for (var k = i + 1; k <= j && sameBlock; k++) {
+            sameBlock = years[k].established;
+          }
+          if (sameBlock) {
+            continue;
+          }
+        }
+
+        final gap = j - i;
+        final distance = cyclic ? math.min(gap, n - gap) : gap;
+        if (distance < minReturnYears) {
+          result.add(crop);
+        }
+      }
+    }
+    return result;
+  }
+
+  /// Сколько раз подряд идут культуры одного семейства (по кругу).
+  int _familyRepeats(List<RotationYear> years) {
+    final n = years.length;
+    var repeats = 0;
+    for (var i = 0; i < n; i++) {
+      final next = years[(i + 1) % n];
+      if (next.established) {
+        continue;
+      }
+      // Повторная культура стоит на поле прямо перед следующей основной.
+      final second = years[i].cover;
+      final before = second != null && !second.crop.isCover
+          ? second.crop
+          : years[i].main.crop;
+      if (before.family == next.main.crop.family ||
+          years[i].main.crop.family == next.main.crop.family) {
+        repeats++;
+      }
+    }
+    return repeats;
+  }
 
   // ----------------------------------------
   // Объяснения
@@ -802,11 +1175,15 @@ class RotationAdvisor {
     required RegionProfile? region,
     required SiteConditions site,
     required ClimatePatterns? patterns,
+    required _Money money,
+    required String currency,
+    required DailyClimate? daily,
+    required ElevationCorrection? elevation,
   }) {
     // Если модель типов лет обучена, стратегия «проживает» засушливый,
     // обычный и влажный год, а оценки усредняются с весами типов лет.
     final outcomes = <YearTypeOutcome>[];
-    var scores = _score(years, field, site);
+    var scores = _score(years, field, site, money);
 
     if (patterns != null && climate != null) {
       var water = 0.0;
@@ -818,7 +1195,7 @@ class RotationAdvisor {
 
       for (final type in patterns.yearTypes) {
         final replayed = _replay(years, type.climate, site);
-        final typeScores = _score(replayed, field, site);
+        final typeScores = _score(replayed, field, site, money);
         final weight = type.weight;
 
         water += weight * typeScores.water;
@@ -875,12 +1252,41 @@ class RotationAdvisor {
         if (y.cover != null && !y.cover!.crop.isCover) y.cover!.crop,
     ];
 
-    var repeats = 0;
-    for (var i = 0; i < years.length; i++) {
-      if (crops[i].family == crops[(i + 1) % crops.length].family) {
-        repeats++;
+    final repeats = _familyRepeats(years);
+
+    // Доход в деньгах — только если для всех культур есть цена,
+    // урожайность и затраты.
+    final missingEconomics = <String>{};
+    final margins = <double>[];
+    for (final year in years) {
+      final crop = year.main.crop;
+      final fit = year.main.suitability * site.siteFit(crop);
+      final main = money.margin(crop, fit);
+      if (main == null) {
+        missingEconomics.add(crop.name);
       }
+
+      var value = main ?? 0;
+      final second = year.cover;
+      if (second != null && !second.crop.isCover) {
+        final extra = money.margin(
+          second.crop,
+          second.suitability * site.siteFit(second.crop),
+          share: secondCropYieldShare,
+        );
+        if (extra == null) {
+          missingEconomics.add(second.crop.name);
+        }
+        value += extra ?? 0;
+      }
+      margins.add(value);
     }
+    final marginPerHa = missingEconomics.isEmpty
+        ? margins.reduce((a, b) => a + b) / margins.length
+        : null;
+
+    String moneyLabel(double value) =>
+        '${_thousands(value.round())} $currency';
 
     // --- Почему предложено ---
     final why = <String>[];
@@ -913,7 +1319,16 @@ class RotationAdvisor {
     if (legumes.isNotEmpty) {
       why.add(
         'Бобовые (${names(legumes)}) фиксируют азот из воздуха и оставляют '
-        'его следующей культуре.',
+        'его следующей культуре'
+        '${site.soil?.nitrogen == NutrientLevel.low ? ' — при низком азоте '
+            'в почве (${site.soil!.sourceLabel}) это особенно ценно' : ''}.',
+      );
+    }
+    final perennials = distinct.where((c) => c.isPerennial).toList();
+    if (perennials.isNotEmpty) {
+      why.add(
+        '${names(perennials)} — многолетняя культура: несколько лет подряд '
+        'закрывает поле круглый год и накапливает азот и органику.',
       );
     }
     if (deepRooted.isNotEmpty && kind != StrategyKind.current) {
@@ -948,19 +1363,34 @@ class RotationAdvisor {
     final evidence = <String>[];
     if (climate != null) {
       for (final year in years) {
+        if (year.established) {
+          continue;
+        }
         for (final fit in [year.main, ?year.cover]) {
           final start = fit.startMonth;
           if (start == null) {
             continue;
           }
+          final window = identical(fit, year.main)
+              ? daily?.sowingWindow(fit.crop, start)
+              : null;
+          final sowing = window == null
+              ? 'посев — ${ClimateSummary.monthNames[start]}'
+              : 'посев — с ${window.decade} (${window.reason})';
           evidence.add(
-            '${fit.crop.name}: посев — ${ClimateSummary.monthNames[start]}, '
+            '${fit.crop.name}: $sowing, '
             'потребность ${fit.waterNeedMm.round()} мм, осадки покрывают '
             '${fit.effectiveRainMm.round()} мм, дефицит '
             '${fit.deficitMm.round()} мм; соответствие климату '
             '${(fit.suitability * 100).round()}%.',
           );
         }
+      }
+      if (daily != null) {
+        evidence.add(
+          'Сроки посева и заморозки: суточные данные NASA POWER '
+          '(${daily.firstYear}–${daily.lastYear}).',
+        );
       }
       evidence.add(
         'Климат: NASA POWER'
@@ -978,6 +1408,28 @@ class RotationAdvisor {
       'Свойства культур — встроенный справочник (ориентиры FAO-56 и '
       'типовые агрономические нормы).',
     );
+    if (elevation != null && elevation.significant) {
+      evidence.add(elevation.describe());
+    }
+    final soil = site.soil;
+    if (soil != null && !soil.isEmpty) {
+      evidence.add(
+        'Почва (${soil.sourceLabel}): ${soil.summary().join(', ')}.',
+      );
+      if (soil.salinity != null) {
+        evidence.add(
+          'Солеустойчивость культур — ориентиры FAO (Ayers & Westcot, 1985; '
+          'Maas–Hoffman), потеря около 10% урожая на 1 дС/м выше порога.',
+        );
+      }
+    }
+    if (marginPerHa != null) {
+      evidence.add(
+        'Доход: ваши цены, урожайность и затраты; урожай снижен, если '
+        'культуре не подходит климат или участок. Повторный посев — '
+        '${(secondCropYieldShare * 100).round()}% урожая основного.',
+      );
+    }
 
     // --- Выгоды ---
     final benefits = <String>[];
@@ -1021,12 +1473,23 @@ class RotationAdvisor {
           '(+${pestDelta.round()} из 100).',
         );
       }
-      final incomeDelta = scores.income - baseline.scores.income;
-      if (incomeDelta >= 3) {
-        benefits.add(
-          'Выше относительная рыночная ценность '
-          '(+${incomeDelta.round()} из 100).',
-        );
+      final baseMargin = baseline.marginPerHa;
+      if (marginPerHa != null && baseMargin != null) {
+        final delta = marginPerHa - baseMargin;
+        if (delta > 0) {
+          benefits.add(
+            'Доход выше примерно на ${moneyLabel(delta)} с гектара в год '
+            '(по вашим ценам и затратам).',
+          );
+        }
+      } else {
+        final incomeDelta = scores.income - baseline.scores.income;
+        if (incomeDelta >= 3) {
+          benefits.add(
+            'Выше относительная рыночная ценность '
+            '(+${incomeDelta.round()} из 100).',
+          );
+        }
       }
       final bareDelta = baseline.avgBareMonths - avgBare;
       if (bareDelta >= 0.5) {
@@ -1060,7 +1523,12 @@ class RotationAdvisor {
         'Нет климатических данных: загрузите их при наличии сети.'
       else
         'Климатология NASA POWER — среднее за много лет по ячейке около '
-            '50 км; микроклимат поля и погода конкретного года не учтены.',
+            '50 км; ${elevation != null && elevation.significant ? 'высота '
+                'поля учтена, но' : 'высота поля не учтена,'} склон, '
+            'долина и другой микроклимат поля — нет.',
+      if (climate != null && daily == null)
+        'Суточные данные не загружены — сроки посева указаны с точностью '
+            'до месяца.',
       if (field.soilPh == null)
         'Не указан pH почвы — совместимость культур с почвой не проверена.',
       if (field.irrigation == null || field.irrigation == 'Нет данных')
@@ -1073,8 +1541,18 @@ class RotationAdvisor {
         'Уклон участка не определён — риск эрозии не оценён.',
       if (site.soilType == null || site.soilType == 'Другое')
         'Не указан тип почвы — влагоёмкость принята средней.',
-      'Нет данных о запасе питательных веществ и засолении.',
-      'Рыночная ценность — условная оценка 1–5, а не местные цены.',
+      if (soil == null || soil.salinity == null)
+        'Засоление не указано — солеустойчивость культур не проверена.',
+      if (soil == null || soil.groundwaterM == null)
+        'Глубина грунтовых вод не указана.',
+      if (soil == null || !soil.nutrientsKnown)
+        'Нет данных анализа почвы (азот, фосфор, калий).',
+      if (soil != null && !soil.isEmpty && !soil.fromLabTest)
+        'Данные о почве — со слов фермера, без лабораторного анализа.',
+      if (missingEconomics.isNotEmpty)
+        'Нет цены, урожайности или затрат для: '
+            '${missingEconomics.join(', ')} — для них доход оценён '
+            'условным индексом 1–5.',
       if (region != null)
         ...region.notes
       else
@@ -1136,6 +1614,13 @@ class RotationAdvisor {
         'вредители и болезни.',
       );
     }
+    final returning = _shortReturns(years).toSet();
+    if (years.length > 1 && returning.isNotEmpty) {
+      risks.add(
+        '${names(returning)} возвращается на поле раньше чем через '
+        '$minReturnYears года — копятся вредители и болезни этой культуры.',
+      );
+    }
     if (secondCrops.isNotEmpty) {
       risks.add(
         'Повторный посев требует быстрой уборки предшественника и полива '
@@ -1148,10 +1633,10 @@ class RotationAdvisor {
         'пересекаться с посевом следующей основной — уточните календарь.',
       );
     }
-    if (distinct.any((c) => c.id == 'alfalfa')) {
+    for (final crop in perennials) {
       risks.add(
-        'Люцерна — многолетняя культура: обычно её держат 2–4 года, '
-        'это нужно учесть в плане.',
+        '${crop.name} занимает поле несколько лет подряд: распашка и '
+        'перевод на другую культуру требуют отдельного планирования.',
       );
     }
     if (kind != StrategyKind.current) {
@@ -1167,12 +1652,59 @@ class RotationAdvisor {
       }
     }
 
-    for (final year in years) {
-      final crop = year.main.crop;
+    final salinity = soil?.salinity;
+    final groundwater = soil?.groundwaterM;
+    for (final crop in {
+      ...crops,
+      ...secondCrops,
+      ...covers,
+    }) {
       if (site.textureFit(crop) < 1) {
         risks.add(
           '${crop.name}: тип почвы «${site.soilType}» подходит плохо — '
           'нужна проверка на месте.',
+        );
+      }
+      if (salinity != null && salinity != Salinity.none) {
+        final threshold = crop.saltThreshold;
+        if (threshold == null) {
+          risks.add(
+            '${crop.name}: солеустойчивость в справочнике не указана, а '
+            'засоление ${salinity.label} — уточните у агронома.',
+          );
+        } else if (salinity.ece > threshold) {
+          final loss = ((1 - site.salinityFit(crop)) * 100).round();
+          risks.add(
+            '${crop.name}: засоление ${salinity.label} (около '
+            '${salinity.ece.round()} дС/м) выше порога культуры '
+            '(${threshold.toStringAsFixed(1)} дС/м) — урожай может быть '
+            'ниже примерно на $loss%.',
+          );
+        }
+      }
+      if (groundwater != null && site.waterloggingFit(crop) < 1) {
+        risks.add(
+          '${crop.name} плохо переносит близкие грунтовые воды '
+          '(${groundwater.toStringAsFixed(1)} м).',
+        );
+      }
+    }
+    if (site.secondarySalinizationRisk) {
+      risks.add(
+        'Грунтовые воды ближе 2 м при поливе «${site.irrigationLabel}» — '
+        'риск вторичного засоления; помогают дренаж и экономный полив.',
+      );
+    }
+    final hungry = distinct.where((c) => c.nitrogenDemand >= 4).toList();
+    for (final (nutrient, level) in [
+      ('фосфора', soil?.phosphorus),
+      ('калия', soil?.potassium),
+    ]) {
+      if (level == NutrientLevel.low && hungry.isNotEmpty) {
+        risks.add(
+          'По данным о почве мало $nutrient: культуры с высоким выносом '
+          '(${names(hungry)}) без подкормки могут недобрать урожай — норму '
+          'определяет агроном.',
         );
       }
     }
@@ -1229,8 +1761,25 @@ class RotationAdvisor {
           : uniqueRisks,
       irrigationEfficiency: site.irrigationEfficiency,
       yearOutcomes: outcomes,
+      marginPerHa: marginPerHa,
+      missingEconomics: missingEconomics.toList(),
     );
   }
+
+  static String _thousands(int value) {
+    final digits = value.abs().toString();
+    final buffer = StringBuffer(value < 0 ? '−' : '');
+    for (var i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) {
+        buffer.write(' ');
+      }
+      buffer.write(digits[i]);
+    }
+    return buffer.toString();
+  }
+
+  static String formatMoney(double value, String currency) =>
+      '${_thousands(value.round())} $currency';
 
   /// Пересчитывает севооборот для другого климата (типа года): сроки
   /// и водный баланс культур подбираются заново.
@@ -1268,7 +1817,7 @@ class RotationAdvisor {
             }
           }
 
-          return RotationYear(main: main, cover: cover);
+          return year.withMain(main, cover: cover);
         }(),
     ];
   }
@@ -1299,13 +1848,19 @@ class RotationAdvisor {
     ClimateSummary? climate,
     List<RotationYear> currentYears,
     SiteConditions site,
-    ClimatePatterns? patterns,
-  ) {
+    ClimatePatterns? patterns, {
+    DailyClimate? daily,
+    ElevationCorrection? elevation,
+  }) {
     if (climate == null) {
       return const [];
     }
 
     final insights = <String>[];
+
+    if (elevation != null && elevation.significant) {
+      insights.add(elevation.describe());
+    }
 
     if (patterns != null) {
       final dry = patterns.dry;
@@ -1313,6 +1868,16 @@ class RotationAdvisor {
         'Модель типов лет (${patterns.firstYear}–${patterns.lastYear}): '
         'засушливых лет ${(dry.share * 100).round()}%, а за последние '
         '10 лет — ${(dry.recentShare * 100).round()}%.',
+      );
+      insights.add(
+        'По водному балансу тёплого сезона засушливых лет '
+        '${patterns.waterBalanceDryYears.length} из ${patterns.yearCount} '
+        '(дефицит влаги на ${ClimatePatternModel.dryDeficitExtraMm.round()} мм '
+        'больше обычных ${patterns.medianSeasonDeficitMm.round()} мм — это '
+        '${(ClimatePatternModel.dryDeficitExtraMm * 10).round()} м³/га полива сверх нормы); из '
+        '${dry.years.length} засушливых по модели совпадают '
+        '${patterns.dryAgreement}. Индекс P/ET0 сезона в засушливые годы — '
+        '${dry.seasonAridity.toStringAsFixed(2)} (${dry.aridityClass}).',
       );
       for (final trend in patterns.trends) {
         if (trend.significant) {
@@ -1350,16 +1915,38 @@ class RotationAdvisor {
       insights.add('Самые засушливые месяцы: ${dry.join(', ')}.');
     }
 
-    final frosty = [
-      for (var m = 0; m < 12; m++)
-        if (climate.frostDays[m] > 3) names[m],
-    ];
-    insights.add(
-      frosty.isEmpty
-          ? 'Месяцев с частыми заморозками нет.'
-          : 'Заморозки вероятны: ${frosty.join(', ')} '
-              '(около ${climate.annualFrostDays.round()} дней в год).',
-    );
+    if (daily != null) {
+      final safe = daily.springFrostSafeDay();
+      final typical = daily.typicalLastSpringFrost();
+      final autumn = daily.autumnFrostSafeDay();
+      insights.add(
+        safe < 0
+            ? 'Весенних заморозков по суточным данным практически не бывает.'
+            : 'Последний весенний заморозок обычно до '
+                '${DailyClimate.formatDay(typical)}; после '
+                '${DailyClimate.formatDay(safe)} риск не выше 10%. Первый '
+                'осенний — с ${DailyClimate.formatDay(autumn)} с риском 10%; '
+                'безморозный период около ${daily.frostFreeDays()} дней.',
+      );
+    } else {
+      final frosty = [
+        for (var m = 0; m < 12; m++)
+          if (climate.frostDays[m] > 3) names[m],
+      ];
+      insights.add(
+        frosty.isEmpty
+            ? 'Месяцев с частыми заморозками нет.'
+            : 'Заморозки вероятны: ${frosty.join(', ')} '
+                '(около ${climate.annualFrostDays.round()} дней в год).',
+      );
+    }
+
+    if (site.secondarySalinizationRisk) {
+      insights.add(
+        'Грунтовые воды ${site.soil!.groundwaterM!.toStringAsFixed(1)} м: '
+        'при поливе «${site.irrigationLabel}» возможен подъём солей.',
+      );
+    }
 
     final lastYear = currentYears.last;
     final months = lastYear.main.months;
@@ -1391,5 +1978,44 @@ class RotationAdvisor {
     }
 
     return insights;
+  }
+}
+
+/// Экономика культур для оценки дохода.
+class _Money {
+  final Map<String, CropEconomics> economics;
+
+  /// Лучшая маржа среди культур с полными данными — шкала для оценки 0–1.
+  final double reference;
+
+  const _Money(this.economics, this.reference);
+
+  factory _Money.of(Map<String, CropEconomics> economics) {
+    var best = 0.0;
+    for (final item in economics.values) {
+      final margin = item.margin();
+      if (margin != null && margin > best) {
+        best = margin;
+      }
+    }
+    return _Money(economics, best);
+  }
+
+  bool known(CropProfile crop) =>
+      reference > 0 && (economics[crop.id]?.complete ?? false);
+
+  /// Вклад культуры в оценку дохода, 0–1.
+  double yearValue(CropProfile crop, double fit, {double share = 1.0}) {
+    final item = economics[crop.id];
+    if (known(crop)) {
+      return (item!.margin(yieldShare: fit * share)! / reference)
+          .clamp(0.0, 1.0);
+    }
+    return share * crop.marketValue / 5 * fit;
+  }
+
+  /// Маржа в деньгах с гектара за год; null — данных хватает не для всех.
+  double? margin(CropProfile crop, double fit, {double share = 1.0}) {
+    return economics[crop.id]?.margin(yieldShare: fit * share);
   }
 }

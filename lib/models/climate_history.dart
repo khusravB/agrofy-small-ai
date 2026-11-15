@@ -56,11 +56,15 @@ class ClimateHistory {
   final List<ClimateYear> years;
   final DateTime fetchedAt;
 
+  /// Средняя высота ячейки NASA POWER, м.
+  final double? gridElevation;
+
   const ClimateHistory({
     required this.latitude,
     required this.longitude,
     required this.years,
     required this.fetchedAt,
+    this.gridElevation,
   });
 
   int get firstYear => years.first.year;
@@ -98,6 +102,7 @@ class ClimateHistory {
       rootWetness: hasWetness ? mean((y) => y.rootWetness!) : null,
       period: label ?? '$firstYear–$lastYear',
       fetchedAt: fetchedAt,
+      gridElevation: gridElevation,
     );
   }
 
@@ -188,7 +193,17 @@ class ClimateHistory {
       longitude: longitude,
       years: years,
       fetchedAt: fetchedAt,
+      gridElevation: ClimateSummary.gridElevationOf(json),
     );
+  }
+
+  ClimateYear? yearOf(int year) {
+    for (final item in years) {
+      if (item.year == year) {
+        return item;
+      }
+    }
+    return null;
   }
 
   String encode() {
@@ -196,6 +211,7 @@ class ClimateHistory {
       'latitude': latitude,
       'longitude': longitude,
       'fetchedAt': fetchedAt.toIso8601String(),
+      'gridElevation': gridElevation,
       'years': years.map((y) => y.toJson()).toList(),
     });
   }
@@ -207,6 +223,7 @@ class ClimateHistory {
       latitude: (json['latitude'] as num).toDouble(),
       longitude: (json['longitude'] as num).toDouble(),
       fetchedAt: DateTime.parse(json['fetchedAt'] as String),
+      gridElevation: (json['gridElevation'] as num?)?.toDouble(),
       years: (json['years'] as List)
           .map((y) => ClimateYear.fromJson(y as Map<String, dynamic>))
           .toList(),

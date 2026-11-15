@@ -67,14 +67,17 @@ void main() {
     'climate_history',
     'terrain_cache',
     'observations',
+    'soil_profile',
+    'crop_economics',
+    'climate_daily',
   };
 
   tearDown(() => DatabaseService.useDatabaseForTesting(null));
 
-  test('чистая установка создаёт схему версии 6', () async {
+  test('чистая установка создаёт схему версии 7', () async {
     final db = await openCurrent(inMemoryDatabasePath);
 
-    expect(await db.getVersion(), 6);
+    expect(await db.getVersion(), 7);
     expect(
       await tableNames(db),
       containsAll({'fields', 'field_events', ...advisorTables}),
@@ -110,7 +113,7 @@ void main() {
 
     final upgraded = await openCurrent(path);
 
-    expect(await upgraded.getVersion(), 6);
+    expect(await upgraded.getVersion(), 7);
     expect(await tableNames(upgraded), containsAll(advisorTables));
 
     final fields = await upgraded.query('fields');
@@ -121,7 +124,7 @@ void main() {
 
     // Повторный запуск: миграция не выполняется второй раз, данные на месте.
     final reopened = await openCurrent(path);
-    expect(await reopened.getVersion(), 6);
+    expect(await reopened.getVersion(), 7);
     expect((await reopened.query('fields')).length, 1);
     await reopened.close();
 
@@ -171,7 +174,7 @@ void main() {
     final upgraded = await openCurrent(path);
     DatabaseService.useDatabaseForTesting(upgraded);
 
-    expect(await upgraded.getVersion(), 6);
+    expect(await upgraded.getVersion(), 7);
     expect(await tableNames(upgraded), containsAll(advisorTables));
 
     final seasons = await DatabaseService.instance.getCropSeasons(1);

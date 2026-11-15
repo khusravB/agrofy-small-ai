@@ -1,12 +1,25 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:llamadart/llamadart.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
-enum LlmStatus { unknown, notDownloaded, downloading, ready, loading, loaded, error }
+import 'model_file_check.dart';
+
+enum LlmStatus {
+  unknown,
+  notDownloaded,
+  downloading,
+  verifying,
+  ready,
+  loading,
+  loaded,
+  error,
+}
 
 /// Small AI №3: генеративная языковая модель на устройстве.
 ///
@@ -24,6 +37,11 @@ class LocalLlm extends ChangeNotifier {
       'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/'
       '$fileName';
   static const int approxSizeMb = 491;
+
+  /// Размер и SHA-256 официального файла (Hugging Face, Qwen).
+  static const int expectedBytes = 491400032;
+  static const String expectedSha256 =
+      '74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db';
 
   /// Файл меньше этого размера считается недокачанным.
   static const int _minValidBytes = 400 * 1024 * 1024;
@@ -65,6 +83,7 @@ class LocalLlm extends ChangeNotifier {
   /// Проверяет, есть ли файл модели на устройстве.
   Future<void> refresh() async {
     if (_status == LlmStatus.downloading ||
+        _status == LlmStatus.verifying ||
         _status == LlmStatus.loading ||
         _status == LlmStatus.loaded) {
       return;
@@ -127,6 +146,18 @@ class LocalLlm extends ChangeNotifier {
         throw const HttpException('Файл скачан не полностью');
       }
 
+      _set(LlmStatus.verifying);
+      final problem = await ModelFileCheck.verify(
+        part,
+        expectedBytes: expectedBytes,
+        expectedSha256: expectedSha256,
+      );
+      if (problem != null) {
+        await part.delete();
+        _set(LlmStatus.error, error: problem);
+        return;
+      }
+
       await part.rename(file.path);
       _set(LlmStatus.ready);
     } on Object catch (error) {
@@ -140,6 +171,52 @@ class LocalLlm extends ChangeNotifier {
       client.close();
       _downloadClient = null;
     }
+  }
+
+  /// Берёт файл модели с карты памяти, из «Файлов» или полученный по
+  /// AirDrop/Bluetooth: один раз скачал агроном — раздал остальным.
+  Future<void> importFromFile() async {
+    final picked = await FilePicker.pickFile(type: FileType.any);
+    final path = picked?.path;
+    if (path == null) {
+      return;
+    }
+
+    _set(LlmStatus.verifying);
+    try {
+      final source = File(path);
+      final problem = await ModelFileCheck.verify(
+        source,
+        expectedBytes: expectedBytes,
+        expectedSha256: expectedSha256,
+      );
+      if (problem != null) {
+        _set(LlmStatus.error, error: problem);
+        return;
+      }
+
+      final target = await _modelFile();
+      await source.copy(target.path);
+      _set(LlmStatus.ready);
+    } on Object catch (error) {
+      _set(LlmStatus.error, error: 'Не удалось взять модель из файла: $error');
+    }
+  }
+
+  /// Передаёт файл модели на другой телефон через системное меню
+  /// (AirDrop, Bluetooth, Nearby Share, карта памяти).
+  Future<void> share() async {
+    final file = await _modelFile();
+    if (!file.existsSync()) {
+      return;
+    }
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path)],
+        text: 'Модель $modelName для AGROFY: на другом телефоне откройте '
+            'AI → Вопросы → «Из файла».',
+      ),
+    );
   }
 
   void cancelDownload() {

@@ -5,6 +5,9 @@ import 'package:path/path.dart';
 import '../decision/saved_observation.dart';
 import '../models/climate_history.dart';
 import '../models/climate_summary.dart';
+import '../models/crop_economics.dart';
+import '../models/daily_climate.dart';
+import '../models/soil_profile.dart';
 import '../models/terrain_info.dart';
 import '../models/crop_season.dart';
 import '../models/farmer_priorities.dart';
@@ -15,7 +18,7 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
 
   /// Текущая версия схемы локальной БД.
-  static const int schemaVersion = 6;
+  static const int schemaVersion = 7;
 
   static Database? _database;
 
@@ -69,6 +72,7 @@ class DatabaseService {
     await _createAdvisorTables(db);
     await _createSmallAiTables(db);
     await _createObservationsTable(db);
+    await _createFarmDataTables(db);
   }
 
   static Future<void> upgradeSchema(
@@ -119,6 +123,44 @@ class DatabaseService {
     if (oldVersion < 6) {
       await _createObservationsTable(db);
     }
+
+    if (oldVersion < 7) {
+      await _createFarmDataTables(db);
+    }
+  }
+
+  /// Схема v7: почва участка, экономика культур и суточный климат.
+  static Future<void> _createFarmDataTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS soil_profile (
+        field_id INTEGER PRIMARY KEY,
+        salinity TEXT,
+        groundwater_m REAL,
+        humus_pct REAL,
+        nitrogen TEXT,
+        phosphorus TEXT,
+        potassium TEXT,
+        from_lab INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS crop_economics (
+        crop_id TEXT PRIMARY KEY,
+        price_per_t REAL,
+        yield_t_ha REAL,
+        cost_per_ha REAL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS climate_daily (
+        field_id INTEGER PRIMARY KEY,
+        payload TEXT NOT NULL,
+        fetched_at TEXT NOT NULL
+      )
+    ''');
   }
 
   /// Схема v6: структурированные наблюдения фермера с принятым решением —
@@ -290,6 +332,8 @@ class DatabaseService {
         'climate_history',
         'terrain_cache',
         'observations',
+        'soil_profile',
+        'climate_daily',
       ]) {
         await txn.delete(
           table,
@@ -555,5 +599,106 @@ class DatabaseService {
     final db = await database;
 
     return db.insert('observations', observation.toMap()..remove('id'));
+  }
+
+  Future<SoilProfile?> getSoilProfile(int fieldId) async {
+    final db = await database;
+
+    final result = await db.query(
+      'soil_profile',
+      where: 'field_id = ?',
+      whereArgs: [fieldId],
+      limit: 1,
+    );
+
+    return result.isEmpty ? null : SoilProfile.fromMap(result.first);
+  }
+
+  Future<void> saveSoilProfile(int fieldId, SoilProfile profile) async {
+    final db = await database;
+
+    await db.insert(
+      'soil_profile',
+      profile.toMap(fieldId),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Экономика культур — общая для хозяйства, а не для участка.
+  Future<Map<String, CropEconomics>> getCropEconomics() async {
+    final db = await database;
+
+    final result = await db.query('crop_economics');
+    return {
+      for (final row in result)
+        row['crop_id'] as String: CropEconomics.fromMap(row),
+    };
+  }
+
+  Future<void> saveCropEconomics(CropEconomics economics) async {
+    final db = await database;
+
+    await db.insert(
+      'crop_economics',
+      economics.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> deleteCropEconomics(String cropId) async {
+    final db = await database;
+
+    await db.delete(
+      'crop_economics',
+      where: 'crop_id = ?',
+      whereArgs: [cropId],
+    );
+  }
+
+  Future<DailyClimate?> getDailyClimate(int fieldId) async {
+    final db = await database;
+
+    final result = await db.query(
+      'climate_daily',
+      where: 'field_id = ?',
+      whereArgs: [fieldId],
+      limit: 1,
+    );
+
+    if (result.isEmpty) {
+      return null;
+    }
+
+    try {
+      return DailyClimate.decode(result.first['payload'] as String);
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<void> saveDailyClimate(int fieldId, DailyClimate daily) async {
+    final db = await database;
+
+    await db.insert(
+      'climate_daily',
+      {
+        'field_id': fieldId,
+        'payload': daily.encode(),
+        'fetched_at': daily.fetchedAt.toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Снимает урожайность у записи года.
+  Future<void> setSeasonYield(int fieldId, int year, double? yieldTHa) async {
+    final db = await database;
+
+    await db.update(
+      'crop_seasons',
+      {'yield_t_ha': yieldTHa},
+      where: 'field_id = ? AND year = ?',
+      whereArgs: [fieldId, year],
+    );
   }
 }

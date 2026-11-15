@@ -4,15 +4,23 @@ import '../ai/climate_pattern_model.dart';
 import '../ai/farm_assistant.dart';
 import '../app_events.dart';
 import '../data/crop_catalog.dart';
+import '../models/climate_history.dart';
 import '../models/climate_summary.dart';
+import '../models/crop_economics.dart';
+import '../models/crop_profile.dart';
 import '../models/crop_season.dart';
+import '../models/daily_climate.dart';
 import '../models/farmer_priorities.dart';
 import '../models/field.dart';
+import '../models/site_conditions.dart';
+import '../models/soil_profile.dart';
 import '../models/terrain_info.dart';
 import '../services/database_service.dart';
 import '../services/nasa_power_service.dart';
 import '../services/rotation_advisor.dart';
 import '../services/terrain_service.dart';
+import '../services/yield_calibration.dart';
+import 'advisor_cards.dart';
 import 'assistant_chat.dart';
 import 'observation_tab.dart';
 
@@ -39,8 +47,18 @@ class _AIScreenState extends State<AIScreen> {
   Field? _field;
 
   ClimateSummary? _climate;
+  ClimateHistory? _climateHistory;
   ClimatePatterns? _patterns;
   TerrainInfo? _terrain;
+  DailyClimate? _daily;
+  SoilProfile? _soil;
+
+  /// Экономика культур, введённая фермером (общая для хозяйства).
+  Map<String, CropEconomics> _economics = {};
+
+  /// Кэш расчёта: пересчёт только при изменении входных данных.
+  String? _resultKey;
+  AdvisorResult? _result;
   bool _climateLoading = false;
   String? _climateError;
 
@@ -53,7 +71,7 @@ class _AIScreenState extends State<AIScreen> {
 
   List<int> get _historyYears {
     final year = DateTime.now().year;
-    return [year - 2, year - 1, year];
+    return [year - 3, year - 2, year - 1, year];
   }
 
   @override
@@ -76,6 +94,7 @@ class _AIScreenState extends State<AIScreen> {
 
     try {
       final fields = await _db.getFields();
+      final economics = await _db.getCropEconomics();
       if (!mounted) {
         return;
       }
@@ -90,6 +109,7 @@ class _AIScreenState extends State<AIScreen> {
 
       setState(() {
         _fields = fields;
+        _economics = economics;
         _loading = false;
       });
 
@@ -108,8 +128,11 @@ class _AIScreenState extends State<AIScreen> {
       setState(() {
         _field = null;
         _climate = null;
+        _climateHistory = null;
         _patterns = null;
         _terrain = null;
+        _daily = null;
+        _soil = null;
         _history = {};
       });
       return;
@@ -122,6 +145,8 @@ class _AIScreenState extends State<AIScreen> {
     final terrain = await _db.getTerrain(id);
     final seasons = await _db.getCropSeasons(id);
     final priorities = await _db.getPriorities(id);
+    final daily = await _db.getDailyClimate(id);
+    final soil = await _db.getSoilProfile(id);
 
     if (!mounted) {
       return;
@@ -131,8 +156,11 @@ class _AIScreenState extends State<AIScreen> {
       _field = field;
       _climate = climate;
       // Модель типов лет обучается на устройстве при открытии участка.
+      _climateHistory = history;
       _patterns = history == null ? null : _patternModel.train(history);
       _terrain = terrain;
+      _daily = daily;
+      _soil = soil;
       _climateError = null;
       _history = {for (final season in seasons) season.year: season};
       _priorities = priorities;
@@ -183,8 +211,22 @@ class _AIScreenState extends State<AIScreen> {
         await _db.saveClimateHistory(id, history);
         if (mounted) {
           setState(() {
-                  _patterns = _patternModel.train(history);
+            _climateHistory = history;
+            _patterns = _patternModel.train(history);
           });
+        }
+      } on Object {
+        partial = true;
+      }
+
+      try {
+        final daily = await _power.fetchDaily(
+          latitude: latitude,
+          longitude: longitude,
+        );
+        await _db.saveDailyClimate(id, daily);
+        if (mounted) {
+          setState(() => _daily = daily);
         }
       } on Object {
         partial = true;
@@ -205,9 +247,9 @@ class _AIScreenState extends State<AIScreen> {
 
       if (partial && mounted) {
         setState(() {
-          _climateError = 'Климат загружен, но история по годам или рельеф '
-              'не получены. Повторите позже — советник пока работает '
-              'без них.';
+          _climateError = 'Климат загружен, но история по годам, суточные '
+              'данные или рельеф получены не полностью. Повторите позже — '
+              'советник пока работает без них.';
         });
       }
       notifyDataChanged();
@@ -262,6 +304,52 @@ class _AIScreenState extends State<AIScreen> {
     }
   }
 
+  Future<void> _setYield(int year, String text) async {
+    final id = _field?.id;
+    final season = _history[year];
+    if (id == null || season == null) {
+      return;
+    }
+
+    final value = double.tryParse(text.trim().replaceAll(',', '.'));
+    final updated = CropSeason(
+      id: season.id,
+      fieldId: season.fieldId,
+      year: season.year,
+      cropId: season.cropId,
+      stage: season.stage,
+      sownAt: season.sownAt,
+      harvestedAt: season.harvestedAt,
+      yieldTHa: value != null && value > 0 ? value : null,
+      note: season.note,
+    );
+
+    setState(() => _history[year] = updated);
+    await _db.setSeasonYield(id, year, updated.yieldTHa);
+  }
+
+  Future<void> _saveSoil(SoilProfile soil) async {
+    final id = _field?.id;
+    if (id == null) {
+      return;
+    }
+    setState(() => _soil = soil);
+    await _db.saveSoilProfile(id, soil);
+  }
+
+  Future<void> _saveEconomics(CropEconomics economics) async {
+    setState(() => _economics = {..._economics, economics.cropId: economics});
+    await _db.saveCropEconomics(economics);
+  }
+
+  Future<void> _clearEconomics(String cropId) async {
+    setState(() => _economics = {..._economics}..remove(cropId));
+    await _db.deleteCropEconomics(cropId);
+  }
+
+  Map<String, CropEconomics> get _effectiveEconomics =>
+      CropEconomics.withRecordedYields(_economics, _history.values);
+
   void _setPriorities(FarmerPriorities priorities) {
     setState(() => _priorities = priorities);
 
@@ -279,8 +367,37 @@ class _AIScreenState extends State<AIScreen> {
 
   AdvisorResult _advise(Field field) {
     final years = _history.keys.toList()..sort();
+    final economics = _effectiveEconomics;
 
-    return _advisor.advise(
+    // Расчёт тяжёлый (до тысяч вариантов): пересчитываем, только если
+    // изменились входные данные.
+    final key = [
+      field.id,
+      field.crop,
+      field.irrigation,
+      field.soilType,
+      field.soilPh,
+      field.elevation,
+      _priorities.encode(),
+      _rainFactor,
+      _tempDelta,
+      for (final year in years)
+        '$year:${_history[year]!.cropId}:${_history[year]!.yieldTHa}',
+      for (final item in economics.values)
+        '${item.cropId}:${item.pricePerT}:${item.yieldTHa}:${item.costPerHa}',
+      _climate?.fetchedAt,
+      _climateHistory?.fetchedAt,
+      _daily?.fetchedAt,
+      _terrain?.fetchedAt,
+      _soil?.updatedAt,
+    ].join('|');
+
+    final cached = _result;
+    if (cached != null && key == _resultKey) {
+      return cached;
+    }
+
+    final result = _advisor.advise(
       field: field,
       historyCropIds: [for (final year in years) _history[year]!.cropId],
       climate: _climate?.adjusted(
@@ -292,7 +409,41 @@ class _AIScreenState extends State<AIScreen> {
       // по фактической истории, поэтому в сценарии не используются.
       patterns: _rainFactor == 1.0 && _tempDelta == 0.0 ? _patterns : null,
       terrain: _terrain,
+      soil: _soil,
+      economics: economics,
+      daily: _daily?.withTempDelta(_tempDelta),
     );
+
+    _resultKey = key;
+    _result = result;
+    return result;
+  }
+
+  YieldCalibration _calibration(Field field, AdvisorResult result) {
+    return YieldCalibration.compute(
+      seasons: _history.values,
+      history: _climateHistory,
+      site: SiteConditions.of(field, terrain: _terrain, soil: _soil),
+      advisor: _advisor,
+      tempDelta: result.elevation?.significant ?? false
+          ? result.elevation!.deltaT
+          : 0,
+    );
+  }
+
+  /// Культуры стратегий — для карточки экономики.
+  List<CropProfile> _strategyCrops(AdvisorResult result) {
+    final crops = <String, CropProfile>{};
+    for (final strategy in result.strategies) {
+      for (final year in strategy.years) {
+        crops[year.main.crop.id] = year.main.crop;
+        final second = year.cover;
+        if (second != null && !second.crop.isCover) {
+          crops[second.crop.id] = second.crop;
+        }
+      }
+    }
+    return crops.values.toList();
   }
 
   AssistantContext _assistantContext() {
@@ -411,10 +562,21 @@ class _AIScreenState extends State<AIScreen> {
           ),
         ],
         const SizedBox(height: 12),
-        _buildClimateCard(field),
+        _buildClimateCard(field, result),
+        SoilCard(soil: _soil, onSave: _saveSoil),
         _buildHistoryCard(field),
+        CalibrationCard(calibration: _calibration(field, result)),
         _buildPrioritiesCard(),
         if (_climate != null) _buildScenarioCard(),
+        if (result.strategies.isNotEmpty)
+          EconomicsCard(
+            crops: _strategyCrops(result),
+            entered: _economics,
+            effective: _effectiveEconomics,
+            currency: result.currency,
+            onSave: _saveEconomics,
+            onClear: _clearEconomics,
+          ),
         if (result.insights.isNotEmpty)
           _Section(
             icon: Icons.insights,
@@ -438,6 +600,7 @@ class _AIScreenState extends State<AIScreen> {
             _StrategyCard(
               strategy: strategy,
               isBest: identical(strategy, best),
+              currency: result.currency,
             ),
         ],
         const SizedBox(height: 8),
@@ -447,8 +610,13 @@ class _AIScreenState extends State<AIScreen> {
     );
   }
 
-  Widget _buildClimateCard(Field field) {
-    final climate = _climate;
+  Widget _buildClimateCard(Field field, AdvisorResult result) {
+    final daily = result.daily;
+    final elevation = result.elevation;
+    // Показатели — с той же поправкой на высоту, что и в расчётах.
+    final climate = elevation != null && elevation.significant
+        ? _climate?.adjusted(tempDelta: elevation.deltaT)
+        : _climate;
     final hasCoordinates = field.latitude != null && field.longitude != null;
 
     return _Section(
@@ -485,6 +653,14 @@ class _AIScreenState extends State<AIScreen> {
                     'Уклон (SRTM)',
                     '${_terrain!.slopePercent.toStringAsFixed(1)}%',
                   ),
+                if (daily != null)
+                  _Stat('Без заморозков', '${daily.frostFreeDays()} дн.'),
+                if (elevation != null && elevation.significant)
+                  _Stat(
+                    'Поправка на высоту',
+                    '${elevation.deltaT >= 0 ? '+' : '−'}'
+                        '${elevation.deltaT.abs().toStringAsFixed(1)} °C',
+                  ),
               ],
             ),
             if (_patterns != null) ...[
@@ -494,7 +670,8 @@ class _AIScreenState extends State<AIScreen> {
             const SizedBox(height: 8),
             Text(
               'Сохранено на устройстве '
-              '${_formatDate(climate.fetchedAt)}. Многолетние средние.',
+              '${_formatDate(climate.fetchedAt)}. Многолетние средние'
+              '${elevation != null && elevation.significant ? ' с поправкой на высоту поля' : ''}.',
               style: const TextStyle(color: Colors.black54, fontSize: 13),
             ),
           ],
@@ -542,27 +719,53 @@ class _AIScreenState extends State<AIScreen> {
           for (final year in _historyYears)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: DropdownButtonFormField<String?>(
-                key: ValueKey('history-${field.id}-$year'),
-                initialValue: _history[year]?.cropId,
-                isExpanded: true,
-                decoration: InputDecoration(
-                  labelText: '$year год',
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                ),
-                items: [
-                  const DropdownMenuItem<String?>(
-                    value: null,
-                    child: Text('Не указано'),
-                  ),
-                  for (final crop in CropCatalog.mainCrops)
-                    DropdownMenuItem<String?>(
-                      value: crop.id,
-                      child: Text(crop.name),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: DropdownButtonFormField<String?>(
+                      key: ValueKey('history-${field.id}-$year'),
+                      initialValue: _history[year]?.cropId,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: '$year год',
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: [
+                        const DropdownMenuItem<String?>(
+                          value: null,
+                          child: Text('Не указано'),
+                        ),
+                        for (final crop in CropCatalog.mainCrops)
+                          DropdownMenuItem<String?>(
+                            value: crop.id,
+                            child: Text(crop.name),
+                          ),
+                      ],
+                      onChanged: (cropId) => _setHistory(year, cropId),
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: TextFormField(
+                      key: ValueKey(
+                        'yield-${field.id}-$year-${_history[year]?.cropId}',
+                      ),
+                      enabled: _history[year] != null,
+                      initialValue: _history[year]?.yieldTHa?.toString() ?? '',
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'т/га',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (text) => _setYield(year, text),
+                    ),
+                  ),
                 ],
-                onChanged: (cropId) => _setHistory(year, cropId),
               ),
             ),
         ],
@@ -577,7 +780,21 @@ class _AIScreenState extends State<AIScreen> {
       icon: Icons.tune,
       title: 'Ваши приоритеты',
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const Text('Длина севооборота'),
+          const SizedBox(height: 6),
+          SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 3, label: Text('3 года')),
+              ButtonSegment(value: 4, label: Text('4 года')),
+              ButtonSegment(value: 5, label: Text('5 лет')),
+            ],
+            selected: {p.rotationYears},
+            onSelectionChanged: (value) =>
+                _setPriorities(p.copyWith(rotationYears: value.first)),
+          ),
+          const SizedBox(height: 10),
           _LabeledSlider(
             label: 'Экономия воды',
             value: p.water,
@@ -826,7 +1043,13 @@ class _StrategyCard extends StatelessWidget {
   final RotationStrategy strategy;
   final bool isBest;
 
-  const _StrategyCard({required this.strategy, required this.isBest});
+  final String currency;
+
+  const _StrategyCard({
+    required this.strategy,
+    required this.isBest,
+    required this.currency,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -902,11 +1125,27 @@ class _StrategyCard extends StatelessWidget {
               'мес./год',
               style: const TextStyle(color: Colors.black54, fontSize: 13),
             ),
+            if (strategy.marginPerHa != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Доход: около '
+                '${RotationAdvisor.formatMoney(strategy.marginPerHa!, currency)}'
+                ' с гектара в год (по вашим ценам)',
+                style: const TextStyle(
+                  color: _green,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             _ScoreBar('Вода', scores.water),
             _ScoreBar('Почва', scores.soil),
             _ScoreBar('Вредители', scores.pestBreak),
-            _ScoreBar('Доход', scores.income),
+            _ScoreBar(
+              strategy.marginPerHa == null ? 'Доход (индекс)' : 'Доход',
+              scores.income,
+            ),
             _ScoreBar('Устойчивость', scores.resilience),
             if (strategy.yearOutcomes.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -1083,6 +1322,15 @@ class _YearTypesBar extends StatelessWidget {
                 ],
               ),
           ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'P/ET0 тёплого сезона: '
+          '${patterns.yearTypes.map((t) => '${t.label.split(' ').first.toLowerCase()} ${t.seasonAridity.toStringAsFixed(2)}').join(' · ')}'
+          ' (${patterns.dry.aridityClass} класс по UNEP). По водному балансу '
+          'засушливых лет ${patterns.waterBalanceDryYears.length} из '
+          '${patterns.yearCount}.',
+          style: const TextStyle(color: Colors.black54, fontSize: 12),
         ),
       ],
     );

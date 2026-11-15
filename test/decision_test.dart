@@ -74,6 +74,25 @@ const Map<String, Set<String>> evaluationSet = {
   'листья сохнут по краям': {'leaves:drying'},
   'всё хорошо': <String>{},
   'стоит жара, поливали вчера': {'weather:hot'},
+  // Синонимы и разговорные формы.
+  'листья скручиваются': {'leaves:wilting'},
+  'листья побурели и пожухли': {'leaves:drying'},
+  'поле затопило после ливня': {'soil:wet', 'weather:rain'},
+  'стоит духота': {'weather:hot'},
+  'на кустах паутина': {'pests:present'},
+  'растения чахлые, рост отстаёт': {'growth:slow'},
+  // Опечатки.
+  'листя жолтеют': {'leaves:yellowing'},
+  'почьва сухая': {'soil:dry'},
+  'вредетели на кустах': {'pests:present'},
+  'насикомые на листьях': {'pests:present'},
+  // Таджикские фразы (составлены разработчиками, нужна проверка носителем).
+  'баргҳо зард шудаанд': {'leaves:yellowing'},
+  'хок хушк аст': {'soil:dry'},
+  'ҳашарот пайдо шуд': {'pests:present'},
+  'борон борид': {'weather:rain'},
+  'ҳаво хеле гарм аст': {'weather:hot'},
+  'баргҳо пажмурда шуданд': {'leaves:wilting'},
 };
 
 Set<String> keys(FieldObservation observation) =>
@@ -183,7 +202,7 @@ void main() {
 
     test('признак от модели — предположение и не спорит с фермером', () {
       final merged = ObservationInterpreter.mergeLlm(
-        read('почва сухая, листья скрутились'),
+        read('почва сухая, листья странные'),
         {
           ObservationAttribute.soil: 'wet',
           ObservationAttribute.leaves: 'wilting',

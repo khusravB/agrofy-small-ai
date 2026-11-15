@@ -19,6 +19,9 @@ class RegionProfile {
   /// Местные ограничения, которые советник не видит в данных.
   final List<String> notes;
 
+  /// Валюта для расчёта дохода.
+  final String currency;
+
   const RegionProfile({
     required this.name,
     required this.latMin,
@@ -28,12 +31,14 @@ class RegionProfile {
     required this.placeNames,
     required this.cropIds,
     required this.notes,
+    this.currency = 'у. е.',
   });
 
   /// Согдийская область Таджикистана. Рамка координат приблизительная и
   /// захватывает соседние районы Ферганской долины со схожими условиями.
   static const sughd = RegionProfile(
     name: 'Согдийская область',
+    currency: 'сомони',
     latMin: 39.0,
     latMax: 41.1,
     lonMin: 67.3,

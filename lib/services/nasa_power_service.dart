@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/climate_history.dart';
 import '../models/climate_summary.dart';
+import '../models/daily_climate.dart';
 
 /// Загружает многолетнюю климатическую сводку точки из NASA POWER.
 ///
@@ -90,6 +91,44 @@ class NasaPowerService {
     }
 
     return ClimateHistory.fromPowerJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+      latitude: latitude,
+      longitude: longitude,
+      fetchedAt: now,
+    );
+  }
+
+  static const String _dailyPath = '/api/temporal/daily/point';
+
+  /// Загружает суточные температуры за [historyStartYear]…прошлый год —
+  /// для дат заморозков и сроков посева по декадам.
+  Future<DailyClimate> fetchDaily({
+    required double latitude,
+    required double longitude,
+  }) async {
+    final now = DateTime.now();
+
+    final uri = Uri.https(_host, _dailyPath, {
+      'parameters': 'T2M,T2M_MIN',
+      'community': 'AG',
+      'latitude': latitude.toStringAsFixed(4),
+      'longitude': longitude.toStringAsFixed(4),
+      'start': '${historyStartYear}0101',
+      'end': '${now.year - 1}1231',
+      'format': 'JSON',
+    });
+
+    final response = await _client
+        .get(uri)
+        .timeout(const Duration(seconds: 60));
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'NASA POWER ответил с кодом ${response.statusCode}',
+      );
+    }
+
+    return DailyClimate.fromPowerJson(
       jsonDecode(response.body) as Map<String, dynamic>,
       latitude: latitude,
       longitude: longitude,

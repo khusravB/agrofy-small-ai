@@ -17,13 +17,32 @@ class YearType {
   /// Средний климат лет этого типа — на нём проверяются севообороты.
   final ClimateSummary climate;
 
+  /// Агрономический критерий: отношение осадков к испаряемости (P/ET0)
+  /// за тёплый сезон, в среднем по годам этого типа.
+  final double seasonAridity;
+
   const YearType({
     required this.kind,
     required this.years,
     required this.share,
     required this.recentShare,
     required this.climate,
+    this.seasonAridity = 0,
   });
+
+  YearType withClimate(ClimateSummary value) {
+    return YearType(
+      kind: kind,
+      years: years,
+      share: share,
+      recentShare: recentShare,
+      climate: value,
+      seasonAridity: seasonAridity,
+    );
+  }
+
+  /// Класс сухости по индексу UNEP (P/ET0), применённому к тёплому сезону.
+  String get aridityClass => ClimatePatterns.aridityClassOf(seasonAridity);
 
   String get label {
     switch (kind) {
@@ -77,12 +96,61 @@ class ClimatePatterns {
 
   final List<ClimateTrend> trends;
 
+  /// Годы, засушливые по водному балансу: дефицит влаги тёплого сезона
+  /// (испаряемость минус осадки) больше медианы на [ClimatePatternModel.
+  /// dryDeficitExtraMm] и более. Это агрономический критерий в миллиметрах
+  /// полива, в отличие от статистической группы кластеризации.
+  final List<int> waterBalanceDryYears;
+
+  /// Медианный дефицит влаги тёплого сезона, мм.
+  final double medianSeasonDeficitMm;
+
   const ClimatePatterns({
     required this.firstYear,
     required this.lastYear,
     required this.yearTypes,
     required this.trends,
+    this.waterBalanceDryYears = const [],
+    this.medianSeasonDeficitMm = 0,
   });
+
+  static String aridityClassOf(double ratio) {
+    if (ratio < 0.05) {
+      return 'гипераридный';
+    }
+    if (ratio < 0.2) {
+      return 'аридный';
+    }
+    if (ratio < 0.5) {
+      return 'полуаридный';
+    }
+    if (ratio < 0.65) {
+      return 'сухой субгумидный';
+    }
+    return 'гумидный';
+  }
+
+  /// Сколько засушливых по модели лет засушливы и по водному балансу.
+  int get dryAgreement =>
+      dry.years.where(waterBalanceDryYears.contains).length;
+
+  /// Те же типы лет, но с поправкой температуры (высота поля, сценарий).
+  ClimatePatterns withTempDelta(double delta) {
+    if (delta == 0) {
+      return this;
+    }
+    return ClimatePatterns(
+      firstYear: firstYear,
+      lastYear: lastYear,
+      yearTypes: [
+        for (final type in yearTypes)
+          type.withClimate(type.climate.adjusted(tempDelta: delta)),
+      ],
+      trends: trends,
+      waterBalanceDryYears: waterBalanceDryYears,
+      medianSeasonDeficitMm: medianSeasonDeficitMm,
+    );
+  }
 
   int get yearCount => lastYear - firstYear + 1;
 
@@ -107,6 +175,11 @@ class ClimatePatterns {
 class ClimatePatternModel {
   static const int clusters = 3;
   static const int recentYears = 10;
+
+  /// Год засушлив по водному балансу, если дефицит влаги тёплого сезона
+  /// больше медианы на столько миллиметров: 50 мм — это 500 м³ воды на
+  /// гектар сверх обычного года.
+  static const double dryDeficitExtraMm = 50;
 
   const ClimatePatternModel();
 
@@ -159,9 +232,23 @@ class ClimatePatternModel {
           share: members.length / years.length,
           recentShare: recentCount / (years.length - recentFrom),
           climate: history.summaryOf(members, label: kind.name),
+          seasonAridity: members
+                  .map((y) => _seasonBalance(history, y).aridity)
+                  .reduce((a, b) => a + b) /
+              members.length,
         ),
       );
     }
+
+    final deficits = {
+      for (final year in years) year.year: _seasonBalance(history, year).deficit,
+    };
+    final sortedDeficits = deficits.values.toList()..sort();
+    final median = sortedDeficits[sortedDeficits.length ~/ 2];
+    final waterBalanceDry = [
+      for (final entry in deficits.entries)
+        if (entry.value >= median + dryDeficitExtraMm) entry.key,
+    ];
 
     final xs = years.map((y) => y.year.toDouble()).toList();
 
@@ -200,6 +287,31 @@ class ClimatePatternModel {
           years.map((y) => _sum(y.frostDays)).toList(),
         ),
       ],
+      waterBalanceDryYears: waterBalanceDry,
+      medianSeasonDeficitMm: median,
+    );
+  }
+
+  /// Водный баланс тёплого сезона (шесть самых тёплых месяцев года):
+  /// дефицит влаги ET0 − P, мм, и индекс P/ET0.
+  ({double deficit, double aridity}) _seasonBalance(
+    ClimateHistory history,
+    ClimateYear year,
+  ) {
+    final warm = List.generate(12, (m) => m)
+      ..sort((a, b) => year.tMean[b].compareTo(year.tMean[a]));
+    final et0 = history.summaryOf([year]).et0Mm;
+
+    var demand = 0.0;
+    var rain = 0.0;
+    for (final month in warm.take(6)) {
+      demand += et0[month];
+      rain += year.precipMm[month];
+    }
+
+    return (
+      deficit: demand - rain,
+      aridity: demand <= 0 ? 0 : rain / demand,
     );
   }
 
