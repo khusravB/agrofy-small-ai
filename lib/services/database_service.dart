@@ -2,6 +2,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
+import '../decision/saved_observation.dart';
 import '../models/climate_history.dart';
 import '../models/climate_summary.dart';
 import '../models/terrain_info.dart';
@@ -14,7 +15,7 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
 
   /// Текущая версия схемы локальной БД.
-  static const int schemaVersion = 5;
+  static const int schemaVersion = 6;
 
   static Database? _database;
 
@@ -67,6 +68,7 @@ class DatabaseService {
     await _createFieldEventsTable(db);
     await _createAdvisorTables(db);
     await _createSmallAiTables(db);
+    await _createObservationsTable(db);
   }
 
   static Future<void> upgradeSchema(
@@ -113,6 +115,34 @@ class DatabaseService {
       }
       await _createSmallAiTables(db);
     }
+
+    if (oldVersion < 6) {
+      await _createObservationsTable(db);
+    }
+  }
+
+  /// Схема v6: структурированные наблюдения фермера с принятым решением —
+  /// память поля.
+  static Future<void> _createObservationsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        field_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        text TEXT NOT NULL,
+        crop_id TEXT,
+        facts TEXT NOT NULL,
+        decision_code TEXT NOT NULL,
+        decision_status TEXT NOT NULL,
+        action TEXT NOT NULL,
+        follows_id INTEGER
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_observations_field_date
+      ON observations (field_id, date)
+    ''');
   }
 
   static Future<void> _addLifecycleColumns(Database db) async {
@@ -259,6 +289,7 @@ class DatabaseService {
         'advisor_settings',
         'climate_history',
         'terrain_cache',
+        'observations',
       ]) {
         await txn.delete(
           table,
@@ -504,5 +535,25 @@ class DatabaseService {
       terrain.toMap(fieldId),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// Наблюдения участка, от новых к старым.
+  Future<List<SavedObservation>> getObservations(int fieldId) async {
+    final db = await database;
+
+    final result = await db.query(
+      'observations',
+      where: 'field_id = ?',
+      whereArgs: [fieldId],
+      orderBy: 'date DESC, id DESC',
+    );
+
+    return result.map(SavedObservation.fromMap).toList();
+  }
+
+  Future<int> insertObservation(SavedObservation observation) async {
+    final db = await database;
+
+    return db.insert('observations', observation.toMap()..remove('id'));
   }
 }

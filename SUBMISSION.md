@@ -45,6 +45,10 @@ English interfaces, and calibration against recorded yields.
 - Flags bare-field months, the driest months, frost months and significant
   climate trends for the field.
 - Offers a "what if" scenario with rainfall and temperature sliders.
+- Turns a plain-language field observation ("leaves are yellowing, soil is
+  dry") into structured facts with sources, flags missing data and
+  contradictions, and proposes a cautious next step with a plan.
+- Tracks the crop through eight lifecycle stages and keeps a field timeline.
 - Answers questions offline in a chat tab ("What should I plant after cotton?",
   "What if there is a drought?").
 - Shows NASA map layers (NDVI, soil moisture, rainfall, surface temperature)
@@ -83,8 +87,12 @@ The three core models are pure Dart and add no download; the language model is
 an optional 491 MB download.
 
 ### Validity and limitations
-- 59 automated tests cover scoring, the models, the language-model guard, NASA
-  response parsing (real responses saved as fixtures) and database migrations.
+- 92 automated tests cover scoring, the models, the language-model guards, the
+  observation interpreter (16-phrase evaluation set), validator, decision
+  rules, lifecycle, NASA response parsing (real responses saved as fixtures)
+  and database migrations.
+- The observation rules were written by the team, are intentionally limited to
+  "measure / check / consult", and have not been reviewed by an agronomist.
 - The language model has been run in the iOS Simulator only; its Russian is
   imperfect, which is why it never replaces the exact answer.
 - Verified in the iOS Simulator with real NASA data for a field near Khujand.

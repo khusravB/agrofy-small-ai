@@ -1,13 +1,34 @@
 /// Этап жизненного цикла культуры на участке.
 enum CropStage {
-  planned('Запланировано'),
-  sown('Посеяно'),
-  growing('Растёт'),
-  harvested('Убрано');
+  planning('Планирование'),
+  sowing('Посев'),
+  germination('Всходы'),
+  vegetative('Вегетация'),
+  flowering('Цветение'),
+  fruiting('Плодоношение'),
+  harvest('Уборка'),
+  completed('Завершено');
 
   final String label;
 
   const CropStage(this.label);
+
+  /// Названия этапов из схемы БД до версии 6.
+  static const Map<String, CropStage> _legacy = {
+    'planned': planning,
+    'sown': sowing,
+    'growing': vegetative,
+    'harvested': completed,
+  };
+
+  static CropStage parse(Object? name) {
+    for (final stage in values) {
+      if (stage.name == name) {
+        return stage;
+      }
+    }
+    return _legacy[name] ?? completed;
+  }
 }
 
 /// Жизненный цикл культуры на участке в конкретном году: что посеяно,
@@ -35,7 +56,7 @@ class CropSeason {
     required this.fieldId,
     required this.year,
     required this.cropId,
-    this.stage = CropStage.harvested,
+    this.stage = CropStage.completed,
     this.sownAt,
     this.harvestedAt,
     this.yieldTHa,
@@ -87,10 +108,7 @@ class CropSeason {
       fieldId: map['field_id'] as int,
       year: map['year'] as int,
       cropId: map['crop_id'] as String,
-      stage: CropStage.values.firstWhere(
-        (stage) => stage.name == map['stage'],
-        orElse: () => CropStage.harvested,
-      ),
+      stage: CropStage.parse(map['stage']),
       sownAt: date('sown_at'),
       harvestedAt: date('harvested_at'),
       yieldTHa: (map['yield_t_ha'] as num?)?.toDouble(),

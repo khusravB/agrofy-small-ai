@@ -34,6 +34,28 @@ a number that is not in the facts, drifts off topic or is not in Russian
 the note as a convenience, not as advice. Without the model the app works
 exactly the same, minus the note.
 
+## Decision pipeline for field observations
+
+The "Observations" tab follows a strict separation of responsibilities:
+the AI understands the input, a validator checks the evidence, deterministic
+rules decide, and the result is explained as a plan.
+
+| Layer | Code | Responsibility |
+|---|---|---|
+| Interpreter | `lib/decision/observation_interpreter.dart` | Free text → structured facts, each with a source and a status (observed / inferred / unknown) |
+| Evidence validator | `lib/decision/evidence_validator.dart` | Missing data, contradictions between the farmer, the journal, measurements and NASA climate; never picks a side |
+| Decision engine | `lib/decision/decision_engine.dart` | Reproducible rules → a decision code such as `verifySoilMoisture`; asks for a measurement rather than prescribing when evidence is thin |
+| Recommendation and plan | same file | Action, reason, evidence, missing information, three alternatives, expected outcome, status, action steps |
+| Crop lifecycle | `lib/decision/crop_lifecycle.dart` | Eight stages, forward-only transitions, each logged to the field journal |
+| Field memory and outcomes | `lib/decision/saved_observation.dart` | Stored observations; a later observation is compared with the earlier recommendation without claiming causality |
+
+The interpreter is a small lexicon model that always works offline. The
+optional language model may add features only inside a strict JSON schema, only
+about something the farmer actually mentioned, and only as "inferred" — inferred
+facts never trigger rules. The decision rules were written by the developers and
+have not been reviewed by an agronomist; they deliberately stop at "measure",
+"check" and "consult" rather than prescribing treatments.
+
 ## Features
 
 - **Rotation advisor** — current rotation plus three alternatives (water saving,
@@ -48,7 +70,10 @@ exactly the same, minus the note.
 - **Map** — NASA GIBS layers (MODIS NDVI, SMAP soil moisture, GPM IMERG rainfall,
   MODIS land-surface temperature) and field markers coloured by water stress.
 - **Knowledge base** — 22 short offline articles explaining the terms.
-- **Crop lifecycle** — crop, stage and yield per field and year, stored locally.
+- **Observations** — describe what you see in plain words; get extracted facts
+  with sources, missing data, contradictions, a recommendation and a plan.
+- **Crop lifecycle** — eight stages with controlled transitions, stored locally.
+- **Field memory** — timeline of observations, irrigations and stage changes.
 
 ## Data
 
@@ -97,11 +122,13 @@ flutter test
 ```
 
 Tests cover the scoring engine, the three models, the NASA response parsers
-(with real responses saved as fixtures) and database migrations up to schema v5.
+(with real responses saved as fixtures) and database migrations up to schema v6, plus the observation
+interpreter (a 16-phrase evaluation set), validator, decision rules and lifecycle.
 
 ## Structure
 
 - `lib/ai/` — year-type model, trend statistics, intent classifier, retriever, assistant
+- `lib/decision/` — observation interpreter, evidence validator, decision engine, lifecycle, field memory
 - `lib/services/rotation_advisor.dart` — rotation scoring and explanations
 - `lib/services/` — NASA POWER client, terrain client, local database
 - `lib/data/` — crop catalogue, region profile, knowledge base, training examples

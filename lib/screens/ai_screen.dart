@@ -14,6 +14,7 @@ import '../services/nasa_power_service.dart';
 import '../services/rotation_advisor.dart';
 import '../services/terrain_service.dart';
 import 'assistant_chat.dart';
+import 'observation_tab.dart';
 
 const _green = Color(0xFF276749);
 
@@ -242,8 +243,8 @@ class _AIScreenState extends State<AIScreen> {
               year: year,
               cropId: cropId,
               stage: year < DateTime.now().year
-                  ? CropStage.harvested
-                  : CropStage.planned,
+                  ? CropStage.completed
+                  : CropStage.planning,
             ));
 
     setState(() {
@@ -259,16 +260,6 @@ class _AIScreenState extends State<AIScreen> {
     } else {
       await _db.saveCropSeason(season);
     }
-  }
-
-  Future<void> _setStage(int year, CropStage stage) async {
-    final season = _history[year]?.copyWith(stage: stage);
-    if (season == null) {
-      return;
-    }
-
-    setState(() => _history[year] = season);
-    await _db.saveCropSeason(season);
   }
 
   void _setPriorities(FarmerPriorities priorities) {
@@ -319,7 +310,7 @@ class _AIScreenState extends State<AIScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text(
@@ -338,6 +329,7 @@ class _AIScreenState extends State<AIScreen> {
             indicatorColor: _green,
             tabs: [
               Tab(text: 'Советник'),
+              Tab(text: 'Наблюдения'),
               Tab(text: 'Вопросы'),
             ],
           ),
@@ -345,6 +337,7 @@ class _AIScreenState extends State<AIScreen> {
         body: TabBarView(
           children: [
             _buildBody(),
+            ObservationTab(field: _field, climate: _climate),
             AssistantChat(contextProvider: _assistantContext),
           ],
         ),
@@ -572,25 +565,6 @@ class _AIScreenState extends State<AIScreen> {
                 onChanged: (cropId) => _setHistory(year, cropId),
               ),
             ),
-          if (_history[_historyYears.last] != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              'Этап в ${_historyYears.last} году',
-              style: const TextStyle(color: Colors.black54, fontSize: 13),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final stage in CropStage.values)
-                  ChoiceChip(
-                    label: Text(stage.label),
-                    selected: _history[_historyYears.last]!.stage == stage,
-                    onSelected: (_) => _setStage(_historyYears.last, stage),
-                  ),
-              ],
-            ),
-          ],
         ],
       ),
     );

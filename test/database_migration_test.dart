@@ -66,14 +66,15 @@ void main() {
     'advisor_settings',
     'climate_history',
     'terrain_cache',
+    'observations',
   };
 
   tearDown(() => DatabaseService.useDatabaseForTesting(null));
 
-  test('чистая установка создаёт схему версии 5', () async {
+  test('чистая установка создаёт схему версии 6', () async {
     final db = await openCurrent(inMemoryDatabasePath);
 
-    expect(await db.getVersion(), 5);
+    expect(await db.getVersion(), 6);
     expect(
       await tableNames(db),
       containsAll({'fields', 'field_events', ...advisorTables}),
@@ -109,7 +110,7 @@ void main() {
 
     final upgraded = await openCurrent(path);
 
-    expect(await upgraded.getVersion(), 5);
+    expect(await upgraded.getVersion(), 6);
     expect(await tableNames(upgraded), containsAll(advisorTables));
 
     final fields = await upgraded.query('fields');
@@ -120,7 +121,7 @@ void main() {
 
     // Повторный запуск: миграция не выполняется второй раз, данные на месте.
     final reopened = await openCurrent(path);
-    expect(await reopened.getVersion(), 5);
+    expect(await reopened.getVersion(), 6);
     expect((await reopened.query('fields')).length, 1);
     await reopened.close();
 
@@ -170,18 +171,18 @@ void main() {
     final upgraded = await openCurrent(path);
     DatabaseService.useDatabaseForTesting(upgraded);
 
-    expect(await upgraded.getVersion(), 5);
+    expect(await upgraded.getVersion(), 6);
     expect(await tableNames(upgraded), containsAll(advisorTables));
 
     final seasons = await DatabaseService.instance.getCropSeasons(1);
     expect(seasons.single.cropId, 'cotton');
-    expect(seasons.single.stage, CropStage.harvested);
+    expect(seasons.single.stage, CropStage.completed);
 
     await DatabaseService.instance.saveCropSeason(
-      seasons.single.copyWith(stage: CropStage.growing, yieldTHa: 3.2),
+      seasons.single.copyWith(stage: CropStage.vegetative, yieldTHa: 3.2),
     );
     final updated = await DatabaseService.instance.getCropSeasons(1);
-    expect(updated.single.stage, CropStage.growing);
+    expect(updated.single.stage, CropStage.vegetative);
     expect(updated.single.yieldTHa, 3.2);
 
     await upgraded.close();

@@ -332,6 +332,8 @@ class _FieldJournalScreenState extends State<FieldJournalScreen> {
         return Icons.visibility;
       case FieldEventType.pestOrDisease:
         return Icons.bug_report;
+      case FieldEventType.stageChange:
+        return Icons.timeline;
     }
   }
 
@@ -347,6 +349,8 @@ class _FieldJournalScreenState extends State<FieldJournalScreen> {
         return 'Наблюдение';
       case FieldEventType.pestOrDisease:
         return 'Вредители и болезни';
+      case FieldEventType.stageChange:
+        return 'Этап культуры';
     }
   }
 

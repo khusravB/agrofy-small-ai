@@ -5,6 +5,9 @@ enum FieldEventType {
   fertilization,
   observation,
   pestOrDisease,
+
+  /// Смена этапа жизненного цикла культуры.
+  stageChange,
 }
 
 class FieldEvent {
