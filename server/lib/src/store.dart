@@ -70,6 +70,9 @@ class Conversation {
   DateTime updatedAt;
   bool optedOut;
 
+  /// Оставшиеся страницы длинного ответа — выдаются по команде ЕЩЁ.
+  final List<String> pages;
+
   /// Время входящих сообщений и запросов данных — для лимитов.
   final List<DateTime> inbound;
   final List<DateTime> dataRequests;
@@ -81,8 +84,10 @@ class Conversation {
     this.optedOut = false,
     List<DateTime>? inbound,
     List<DateTime>? dataRequests,
+    List<String>? pages,
   })  : inbound = inbound ?? [],
-        dataRequests = dataRequests ?? [];
+        dataRequests = dataRequests ?? [],
+        pages = pages ?? [];
 
   Map<String, dynamic> toJson() => {
         'active_field': activeField,
@@ -91,6 +96,7 @@ class Conversation {
         'opted_out': optedOut,
         'inbound': inbound.map((d) => d.toIso8601String()).toList(),
         'data_requests': dataRequests.map((d) => d.toIso8601String()).toList(),
+        'pages': pages,
       };
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
@@ -102,6 +108,7 @@ class Conversation {
         dataRequests: [
           for (final d in json['data_requests'] as List? ?? []) DateTime.parse('$d'),
         ],
+        pages: [for (final p in json['pages'] as List? ?? []) '$p'],
       );
 }
 
@@ -271,6 +278,7 @@ class Store {
     for (final conversation in conversations.values) {
       if (now.difference(conversation.updatedAt) > contextTtl) {
         conversation.facts = null;
+        conversation.pages.clear();
       }
       conversation.inbound.removeWhere((d) => now.difference(d).inDays >= 1);
       conversation.dataRequests.removeWhere((d) => now.difference(d).inDays >= 1);

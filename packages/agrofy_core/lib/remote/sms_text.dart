@@ -90,6 +90,83 @@ class SmsText {
     return '${kept.join(' ')}$suffix';
   }
 
+  /// Подпись страницы: « (1/3) ЕЩЁ» — дальше есть продолжение,
+  /// « (3/3)» — последняя.
+  static String pageMark(int page, int total) =>
+      page < total ? ' ($page/$total) ЕЩЁ' : ' ($page/$total)';
+
+  /// Делит длинный текст на SMS-страницы целыми предложениями (слишком
+  /// длинное предложение — по словам). Каждая страница с подписью
+  /// помещается в [maxSegments]. Больше [maxPages] страниц не делается:
+  /// остаток отбрасывается, последняя страница заканчивается «…».
+  static List<String> paginate(
+    List<String> parts, {
+    int maxSegments = 3,
+    int maxPages = 10,
+  }) {
+    final reserve = pageMark(maxPages, maxPages + 1);
+    bool fits(String text) => segments('$text$reserve') <= maxSegments;
+
+    final pieces = <String>[];
+    for (final part in parts) {
+      for (final sentence in sentences(part)) {
+        if (fits(sentence)) {
+          pieces.add(sentence);
+          continue;
+        }
+        // Предложение длиннее страницы — делим по словам.
+        var chunk = '';
+        for (final word in sentence.split(' ')) {
+          final candidate = chunk.isEmpty ? word : '$chunk $word';
+          if (fits(candidate) || chunk.isEmpty) {
+            chunk = candidate;
+          } else {
+            pieces.add(chunk);
+            chunk = word;
+          }
+        }
+        if (chunk.isNotEmpty) {
+          pieces.add(chunk);
+        }
+      }
+    }
+
+    final pages = <String>[];
+    var current = '';
+    var truncated = false;
+    for (final piece in pieces) {
+      final candidate = current.isEmpty ? piece : '$current $piece';
+      if (fits(candidate)) {
+        current = candidate;
+        continue;
+      }
+      if (current.isNotEmpty) {
+        pages.add(current);
+      }
+      if (pages.length == maxPages) {
+        truncated = true;
+        current = '';
+        break;
+      }
+      current = piece;
+    }
+    if (current.isNotEmpty && pages.length < maxPages) {
+      pages.add(current);
+    } else if (current.isNotEmpty) {
+      truncated = true;
+    }
+    if (truncated && pages.isNotEmpty) {
+      final last = pages.last.replaceFirst(RegExp(r'[.!?]$'), '');
+      pages[pages.length - 1] = '$last…';
+    }
+    if (pages.length <= 1) {
+      return pages;
+    }
+    return [
+      for (var i = 0; i < pages.length; i++) '${pages[i]}${pageMark(i + 1, pages.length)}',
+    ];
+  }
+
   /// Обрезает текст по границе слова, чтобы он вместе с [reserve]
   /// поместился в [maxSegments].
   static String truncate(String text, int maxSegments, {String reserve = ''}) {

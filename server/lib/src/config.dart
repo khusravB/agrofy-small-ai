@@ -35,6 +35,13 @@ class ServerConfig {
   final int maxPerDay;
   final int maxDataRequestsPerDay;
   final int maxReplySegments;
+
+  /// Давать ли ссылки (отчёт в браузере, файл пакета). По умолчанию нет:
+  /// у фермера может не быть интернета, всё приходит текстом по страницам.
+  final bool reportLinks;
+
+  /// Сколько страниц (SMS) может быть у одного длинного ответа.
+  final int maxPages;
   final Duration packageTtl;
   final Duration contextTtl;
 
@@ -57,6 +64,8 @@ class ServerConfig {
     this.maxPerDay = 60,
     this.maxDataRequestsPerDay = 5,
     this.maxReplySegments = 3,
+    this.reportLinks = false,
+    this.maxPages = 8,
     this.packageTtl = const Duration(days: 7),
     this.contextTtl = const Duration(hours: 24),
   });
@@ -89,6 +98,9 @@ class ServerConfig {
       maxPerDay: number('AGROFY_MAX_PER_DAY', 60),
       maxDataRequestsPerDay: number('AGROFY_MAX_DATA_PER_DAY', 5),
       maxReplySegments: number('AGROFY_MAX_REPLY_SEGMENTS', 3),
+      reportLinks: const {'1', 'true', 'yes', 'on'}
+          .contains((e['AGROFY_REPORT_LINKS'] ?? '').toLowerCase()),
+      maxPages: number('AGROFY_MAX_PAGES', 8),
     );
   }
 

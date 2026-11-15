@@ -17,7 +17,8 @@ gives; no cloud language model is called.
 | `HELP` / `ПОМОЩЬ` / `?` | Short list of commands |
 | `REG F1 40.28,69.62 ХЛОПОК` / `РЕГ …` | Registers field F1 for this phone, downloads NASA POWER climate for it once |
 | `FIELD F1` / `ПОЛЕ F1` | Makes F1 the active field for questions |
-| `INFO F1` / `ИНФО F1` (or `INFO` for the active field) | Everything about the field: a short SMS summary and a link to a full report page (climate, year types and trends, recommended and all rotations with scores and irrigation, sowing dates, drought year) |
+| `INFO F1` / `ИНФО F1` (or `INFO` for the active field) | Everything about the field, page by page: recommended and all rotations with scores and irrigation, sowing dates, drought year, climate, year types and trends |
+| `ЕЩЁ` / `MORE` | Next page of a long answer |
 | `FIELDS` / `ПОЛЯ` | Fields registered from this phone |
 | `FIELD F1 NDVI 90D` | MODIS NDVI package for F1 (default 90 days, max 366) |
 | `FIELD F1 CLIMATE 1Y` | NASA POWER daily temperature and rainfall (default 1 year, max 3) |
@@ -32,12 +33,24 @@ Periods: `90D`, `3M`, `1Y` (days, months, years). Russian works too:
 `ПОЛЕ F1 НДВИ 3М`, `ПОЛЕ F1 КЛИМАТ 1Г` (`КЛИМАТ`/`ПОГОДА`, `ИСТОРИЯ`,
 `ПОСЕВ`, `ДАННЫЕ`; periods `Д`, `М`, `Г`).
 
-When an answer does not fit, the SMS carries its beginning in whole
-sentences and a link: `… Полностью: https://<host>/r/<token>`. The link opens a
-plain mobile web page (no app needed) with the full answer; observation
-replies always link to the full analysis (reasons, options, plan). Report
-links use a random 96-bit token, expire with the packages (7 days), and are
-served with `no-store`, `noindex` and a CSP that allows no scripts.
+**Everything works without mobile internet.** An answer that does not fit
+one SMS is split into pages of whole sentences: the first page ends with
+`(1/4) ЕЩЁ`, and the farmer sends `ЕЩЁ` (or `MORE`, `ДАЛЬШЕ`) for the next one,
+so they decide how many SMS to read and pay for. Pages are kept for 24 hours
+and dropped by the next new message; at most `AGROFY_MAX_PAGES` (default 8)
+pages per answer. Observation replies put the action and the "не диагноз"
+caveat on page 1 and the reasons, plan and options on the next pages.
+
+Data requests arrive as text too: NDVI as dates and values
+(`14.09 0.18; 30.09 0.22; 16.10 0.13 обл.`, monthly means for `HISTORY`),
+climate as monthly mean and minimum temperature and rainfall.
+
+Optional links (`AGROFY_REPORT_LINKS=true`, for farmers who sometimes have
+internet): long answers then come as their beginning plus
+`Полностью: https://<host>/r/<token>`, a plain mobile web page, and data SMS
+include the package file link for import into the app. Report links use a
+random 96-bit token, expire after 7 days, and are served with `no-store`,
+`noindex` and a CSP that allows no scripts.
 
 Replies are at most 3 SMS segments (459 GSM-7 or 201 Cyrillic characters). The
 first sentence always carries the "подсказка, не диагноз" caveat.
@@ -45,7 +58,8 @@ first sentence always carries the "подсказка, не диагноз" cave
 ## Data packages
 
 A data request is acknowledged immediately; the package is built in the
-background and a second SMS brings a link:
+background and a second SMS brings the values as text (see above). With
+`AGROFY_REPORT_LINKS=true` it also carries a link to the package file:
 
 ```
 AGROFY REQ-2026-000001: NDVI готов (READY). Файл: https://…/p/<token> Действует 7 дн. Импорт: приложение → AI → Импортировать пакет.
@@ -138,6 +152,9 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `AGROFY_WEBHOOK_SECRET` | Generic provider: shared secret, 16+ characters |
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
+| `AGROFY_MAX_REPLY_SEGMENTS` | SMS segments per page (default 3) |
+| `AGROFY_MAX_PAGES` | Pages per long answer (default 8) |
+| `AGROFY_REPORT_LINKS` | `true` adds links to web reports and package files (default off: text only) |
 
 Vonage: create an application with the Messages capability, Inbound URL
 `https://<host>/sms/vonage`, Status URL `https://<host>/sms/vonage/status`, and

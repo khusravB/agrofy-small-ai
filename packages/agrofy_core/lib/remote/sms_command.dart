@@ -16,6 +16,9 @@ enum SmsCommandType {
 
   /// Список полей этого номера: FIELDS.
   listFields,
+
+  /// Следующая страница длинного ответа: ЕЩЁ.
+  more,
   question,
 }
 
@@ -111,6 +114,11 @@ class SmsCommand {
     'СТАРТ': SmsCommandType.start,
     'NEW': SmsCommandType.reset,
     'НОВЫЙ': SmsCommandType.reset,
+    'ЕЩЁ': SmsCommandType.more,
+    'ЕЩЕ': SmsCommandType.more,
+    'MORE': SmsCommandType.more,
+    'ДАЛЬШЕ': SmsCommandType.more,
+    'ДАЛЕЕ': SmsCommandType.more,
     'FIELDS': SmsCommandType.listFields,
     'ПОЛЯ': SmsCommandType.listFields,
   };
@@ -120,7 +128,7 @@ class SmsCommand {
   static SmsCommand parse(String raw) {
     final text = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
     final words = text.split(' ');
-    final head = words.first.toUpperCase();
+    final head = words.first.toUpperCase().replaceAll(RegExp(r'[.!?,]+$'), '');
 
     if (words.length == 1 && _keywords.containsKey(head)) {
       return SmsCommand(_keywords[head]!);

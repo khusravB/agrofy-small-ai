@@ -105,6 +105,7 @@ class Harness {
     List<NdviObservation>? ndvi,
     int maxPerHour = 20,
     ProviderKind provider = ProviderKind.generic,
+    bool reportLinks = false,
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -121,6 +122,7 @@ class Harness {
       vonageSignatureSecret: vonageSecret,
       vonageFrom: '15550002222',
       maxPerHour: maxPerHour,
+      reportLinks: reportLinks,
     );
     final store = await Store.open(dir.path);
     final power = FakePower();
@@ -237,6 +239,64 @@ class Harness {
 
 void main() {
   group('Отчёты и команды INFO, FIELDS', () {
+    test('страницы: целые предложения, подпись, лимит страниц', () {
+      final parts = [for (var i = 1; i <= 30; i++) 'Предложение номер $i про поле и воду.'];
+      final pages = SmsText.paginate(parts, maxSegments: 2, maxPages: 4);
+      expect(pages, hasLength(4));
+      expect(pages.first, endsWith(' (1/4) ЕЩЁ'));
+      expect(pages.last, endsWith('… (4/4)'));
+      for (final page in pages) {
+        expect(SmsText.segments(page), lessThanOrEqualTo(2));
+      }
+      expect(SmsText.paginate(['Коротко.']), ['Коротко.']);
+    });
+
+    test('без интернета: INFO приходит страницами, ЕЩЁ выдаёт следующие', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      final first = (await h.sms('INFO F1')).single;
+      expect(first, startsWith('AGROFY: поле F1 (хлопок)'));
+      expect(first, isNot(contains('http')));
+      final total = int.parse(RegExp(r'\(1/(\d+)\) ЕЩЁ$').firstMatch(first)!.group(1)!);
+      expect(total, greaterThan(1));
+      final all = [first];
+      for (var i = 2; i <= total; i++) {
+        all.add((await h.sms(i.isEven ? 'ЕЩЁ' : 'еще')).single);
+      }
+      expect(all.last, endsWith('($total/$total)'));
+      expect(all.join(' '), contains('Варианты:'));
+      expect(all.join(' '), contains('посев'));
+      for (final page in all) {
+        expect(SmsText.segments(page), lessThanOrEqualTo(3));
+      }
+      expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
+    });
+
+    test('новый вопрос сбрасывает недочитанные страницы', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      await h.sms('INFO F1');
+      await h.sms('Когда сеять хлопок?');
+      expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
+    });
+
+    test('без интернета: наблюдение — первая страница и разбор по ЕЩЁ', () async {
+      final h = await Harness.create();
+      final first = (await h.sms('листья желтеют, почва сухая')).single;
+      expect(first, contains('не диагноз'));
+      expect(first, endsWith('ЕЩЁ'));
+      final rest = <String>[];
+      while (true) {
+        final page = (await h.sms('ЕЩЁ')).single;
+        if (page.contains('продолжения нет')) break;
+        rest.add(page);
+      }
+      expect(rest.join(' '), contains('План:'));
+      expect(rest.join(' '), contains('Варианты:'));
+    });
+
     test('разбор команд', () {
       expect(SmsCommand.parse('INFO').type, SmsCommandType.info);
       expect(SmsCommand.parse('инфо f1').fieldId, 'F1');
@@ -265,8 +325,8 @@ void main() {
       return response.readAsString();
     }
 
-    test('INFO F1: сводка в SMS и полный отчёт по ссылке', () async {
-      final h = await Harness.create();
+    test('INFO F1 со ссылками: сводка в SMS и полный отчёт по ссылке', () async {
+      final h = await Harness.create(reportLinks: true);
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
       final reply = (await h.sms('INFO F1')).single;
@@ -291,7 +351,7 @@ void main() {
     });
 
     test('отчёт экранирует текст из SMS', () async {
-      final h = await Harness.create();
+      final h = await Harness.create(reportLinks: true);
       await h.sms('REG F1 40.28,69.62 <script>x</script>');
       await h.settle();
       final html = await page(h, (await h.sms('INFO F1')).single);
@@ -299,8 +359,8 @@ void main() {
       expect(html, contains('&lt;script&gt;'));
     });
 
-    test('длинный ответ — начало и ссылка; ссылка истекает', () async {
-      final h = await Harness.create();
+    test('со ссылками: длинный ответ — начало и ссылка; ссылка истекает', () async {
+      final h = await Harness.create(reportLinks: true);
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
       final reply = (await h.sms('Как меняется климат?')).single;
@@ -322,8 +382,8 @@ void main() {
       expect(expired.statusCode, 404);
     });
 
-    test('наблюдение: короткий ответ и полный разбор по ссылке', () async {
-      final h = await Harness.create();
+    test('со ссылками: наблюдение — короткий ответ и полный разбор по ссылке', () async {
+      final h = await Harness.create(reportLinks: true);
       final reply = (await h.sms('листья желтеют, почва сухая')).single;
       expect(reply, contains('не диагноз'));
       final html = await page(h, reply);
@@ -733,8 +793,8 @@ void main() {
   });
 
   group('Спутниковые данные по SMS', () {
-    test('NDVI: подтверждение, затем SMS со ссылкой на проверяемый пакет', () async {
-      final h = await Harness.create();
+    test('NDVI со ссылками: подтверждение, затем SMS со ссылкой на проверяемый пакет', () async {
+      final h = await Harness.create(reportLinks: true);
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
 
@@ -764,7 +824,7 @@ void main() {
     });
 
     test('DATA по координатам: NDVI и климат NASA POWER', () async {
-      final h = await Harness.create();
+      final h = await Harness.create(reportLinks: true);
       await h.sms('FIELD 40.28,69.62 DATA 90D');
       await h.settle();
 
@@ -776,6 +836,40 @@ void main() {
       ).package!;
       expect(package.datasets.map((d) => d.source), ['NASA_MODIS_MOD13Q1', 'NASA_POWER']);
       expect(package.quality.missingData.single, contains('ещё не обработаны'));
+    });
+
+    test('без интернета: значения NDVI приходят прямо в SMS', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      await h.sms('FIELD F1 NDVI 90D');
+      await h.settle();
+      final text = h.outbox().single['text'] as String;
+      expect(text, isNot(contains('http')));
+      expect(text, contains('14.09 0.18'));
+      expect(text, contains('16.10 0.13 обл.'));
+      expect(text, contains('максимум 0.21'));
+    });
+
+    test('без интернета: климат за год — помесячно, страницами', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      await h.sms('FIELD F1 CLIMATE 1Y');
+      await h.settle();
+      final first = h.outbox().single['text'] as String;
+      final pages = [first];
+      while (true) {
+        final page = (await h.sms('ЕЩЁ')).single;
+        if (page.contains('продолжения нет')) break;
+        pages.add(page);
+      }
+      final all = pages.join(' ');
+      expect(all, contains('Климат NASA POWER по месяцам'));
+      expect(all, contains('20°'));
+      for (final page in pages) {
+        expect(SmsText.segments(page), lessThanOrEqualTo(3));
+      }
     });
 
     test('нет наблюдений — UNAVAILABLE без ссылки', () async {

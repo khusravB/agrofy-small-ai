@@ -12,6 +12,7 @@ import 'package:agrofy_core/decision/observation.dart';
 import 'package:agrofy_core/decision/observation_interpreter.dart';
 import 'package:agrofy_core/models/climate_summary.dart';
 import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/remote/package_text.dart';
 import 'package:agrofy_core/remote/sms_command.dart';
 import 'package:agrofy_core/remote/sms_text.dart';
 import 'package:agrofy_core/services/nasa_power_service.dart';
@@ -47,7 +48,7 @@ class SmsService {
       'AGROFY: задайте вопрос текстом. Поле: REG F1 40.28,69.62 ХЛОПОК. '
       'Всё о поле: INFO F1. Ваши поля: FIELDS. '
       'Спутник: FIELD F1 NDVI 90D (или CLIMATE 1Y). '
-      'NEW — сброс, STOP — отписка.';
+      'Продолжение длинного ответа: ЕЩЁ. NEW — сброс, STOP — отписка.';
 
   final ServerConfig config;
   final Store store;
@@ -88,6 +89,40 @@ class SmsService {
   /// сегментов).
   bool _fitsWhole(List<String> parts) =>
       SmsText.segments(parts.join(' ')) <= config.maxReplySegments;
+
+  /// Длинный ответ. По умолчанию — страницами: первая уходит сразу,
+  /// остальные по команде ЕЩЁ (интернет не нужен). Если включены ссылки —
+  /// начало ([shortParts] или [parts]) и ссылка на страницу с полным текстом.
+  Future<String> _long(
+    InboundSms sms,
+    Conversation conversation,
+    List<String> parts, {
+    required String title,
+    List<ReportSection> Function()? sections,
+    List<String>? shortParts,
+    String? footer,
+  }) async {
+    conversation.pages.clear();
+    if (_fitsWhole(parts)) {
+      return _fit(parts);
+    }
+    if (config.reportLinks) {
+      final url = await reports.publish(
+        ownerHash: phoneHash(sms.from),
+        title: title,
+        sections: sections?.call() ?? [ReportSection(title, paragraphs: parts)],
+        footer: footer,
+      );
+      return _withLink(shortParts ?? parts, url);
+    }
+    final pages = SmsText.paginate(
+      parts,
+      maxSegments: config.maxReplySegments,
+      maxPages: config.maxPages,
+    );
+    conversation.pages.addAll(pages.skip(1));
+    return pages.first;
+  }
 
   /// Начало ответа целыми предложениями и ссылка на полный текст.
   String _withLink(List<String> parts, String url) => SmsText.fit(
@@ -161,6 +196,10 @@ class SmsService {
       return const SmsOutcome([reply]);
     }
 
+    // Новое сообщение заменяет недочитанный длинный ответ.
+    if (command.type != SmsCommandType.more) {
+      conversation.pages.clear();
+    }
     final outcome = await _dispatch(sms, command, conversation, now);
     await store.save();
     await _audit(sms.from, command.type.name, outcome.replies);
@@ -179,7 +218,7 @@ class SmsService {
 
     switch (command.type) {
       case SmsCommandType.help:
-        return SmsOutcome([_fit([helpText])]);
+        return SmsOutcome([await _long(sms, conversation, [helpText], title: 'Команды AGROFY')]);
 
       case SmsCommandType.start:
         conversation.optedOut = false;
@@ -244,6 +283,12 @@ class SmsService {
       case SmsCommandType.info:
         return _info(sms, command, conversation, now);
 
+      case SmsCommandType.more:
+        if (conversation.pages.isEmpty) {
+          return const SmsOutcome(['AGROFY: продолжения нет. Задайте новый вопрос.']);
+        }
+        return SmsOutcome([conversation.pages.removeAt(0)]);
+
       case SmsCommandType.listFields:
         final mine = store.fields[sms.from] ?? const <String, FieldRecord>{};
         if (mine.isEmpty) {
@@ -265,16 +310,15 @@ class SmsService {
           if (active != null) 'Текущее: $active.',
           'Всё о поле: INFO ${active ?? mine.keys.first}.',
         ];
-        if (_fitsWhole(parts)) {
-          return SmsOutcome([_fit(parts)]);
-        }
-        final url = await reports.publish(
-          ownerHash: phoneHash(sms.from),
-          title: 'Поля AGROFY',
-          sections: [ReportSection('Ваши поля', items: list)],
-        );
         return SmsOutcome([
-          _withLink(['AGROFY: полей ${mine.length}.', if (active != null) 'Текущее: $active.'], url),
+          await _long(
+            sms,
+            conversation,
+            parts,
+            title: 'Поля AGROFY',
+            sections: () => [ReportSection('Ваши поля', items: list)],
+            shortParts: ['AGROFY: полей ${mine.length}.', if (active != null) 'Текущее: $active.'],
+          ),
         ]);
 
       case SmsCommandType.question:
@@ -344,7 +388,13 @@ class SmsService {
           longitude: longitude,
           fieldId: fieldId,
         );
-        reply = _packageMessage(built, target, kind);
+        final pages = _packagePages(built, target, kind);
+        reply = pages.first;
+        // Остальные страницы — по ЕЩЁ, как у длинных ответов.
+        store.conversation(sms.from, clock())
+          ..pages.clear()
+          ..pages.addAll(pages.skip(1));
+        await store.save();
       } on Object {
         reply = 'AGROFY: не удалось подготовить данные для $target. '
             'Повторите позже.';
@@ -357,10 +407,38 @@ class SmsService {
       [
         _fit([
           'AGROFY: запрос ${kind.keyword} для $target принят.',
-          'Ссылку на файл пришлём SMS через 1–2 минуты.',
+          'Данные пришлём SMS через 1–2 минуты.',
         ]),
       ],
       work,
+    );
+  }
+
+  /// Данные пакета текстом (интернет не нужен); ссылка на файл для
+  /// импорта — только если ссылки включены.
+  List<String> _packagePages(BuiltPackage built, String target, DataRequestKind kind) {
+    final package = built.package;
+    final url = built.url(config.publicUrl);
+    if (url == null) {
+      return [_packageMessage(built, target, kind)];
+    }
+    String day(DateTime d) =>
+        '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+    final parts = [
+      'AGROFY ${package.requestId}: ${kind.keyword} $target '
+          '${day(package.periodStart)}–${day(package.periodEnd)}.${package.periodEnd.year}, '
+          '${package.quality.statusLabel}.',
+      if (config.reportLinks)
+        'Файл для импорта (до ${day(built.record!.expiresAt)}): $url',
+      ...PackageText.describe(package),
+    ];
+    if (_fitsWhole(parts)) {
+      return [_fit(parts)];
+    }
+    return SmsText.paginate(
+      parts,
+      maxSegments: config.maxReplySegments,
+      maxPages: config.maxPages,
     );
   }
 
@@ -488,28 +566,37 @@ class SmsService {
           ? null
           : recommendation.plan.first.title;
       // Пометка «не диагноз» обязательна, поэтому идёт сразу за действием.
-      final parts = [
+      final shortParts = [
         '${recommendation.action} (подсказка, не диагноз).',
         _firstSentence(recommendation.reason),
         if (next != null && next.toLowerCase() != recommendation.action.toLowerCase())
           'Шаг: ${_lowerFirst(next)}.',
       ];
-      // Полный разбор — причины, варианты, план — по ссылке.
-      final url = await reports.publish(
-        ownerHash: phoneHash(sms.from),
+      // Полный разбор — причины, варианты, план — следующими страницами.
+      final plan = [
+        for (final step in recommendation.plan)
+          '${step.title}${step.dueInDays == 0 ? ' — сегодня' : ' — в течение ${step.dueInDays} дн.'}: ${_lowerFirst(step.result)}.',
+      ];
+      return _long(
+        sms,
+        conversation,
+        [
+          '${recommendation.action} (подсказка, не диагноз).',
+          recommendation.reason,
+          if (plan.isNotEmpty) 'План: ${plan.join(' ')}',
+          if (recommendation.alternatives.isNotEmpty) 'Варианты: ${recommendation.alternatives.join(' ')}',
+          recommendation.expectedOutcome,
+        ],
         title: recommendation.action,
-        sections: [
+        shortParts: shortParts,
+        sections: () => [
           ReportSection('Ваше сообщение', paragraphs: [text]),
           ReportSection('Почему', paragraphs: [recommendation.reason]),
           ReportSection('Варианты', items: recommendation.alternatives),
           ReportSection('Чего ожидать', paragraphs: [recommendation.expectedOutcome]),
-          ReportSection('План', items: [
-            for (final step in recommendation.plan)
-              '${step.title}${step.dueInDays == 0 ? ' — сегодня' : ' — в течение ${step.dueInDays} дн.'}: ${step.result}',
-          ]),
+          ReportSection('План', items: plan),
         ],
       );
-      return _withLink(parts, url);
     }
 
     // 2. Вопрос — классификатор намерений и расчёты советника.
@@ -556,20 +643,18 @@ class SmsService {
     }
 
     final lines = _smsLines(answer.text);
-    if (_fitsWhole(lines)) {
-      return _fit(lines);
-    }
-    final url = await reports.publish(
-      ownerHash: phoneHash(sms.from),
+    return _long(
+      sms,
+      conversation,
+      lines,
       title: 'Ответ AGROFY',
-      sections: [
+      sections: () => [
         ReportSection('Вопрос', paragraphs: [text]),
         ReportSection('Ответ', paragraphs: lines),
       ],
       footer: 'Источник: ${answer.source}. Подсказка, не диагноз — '
           'решение принимает фермер вместе с агрономом.',
     );
-    return _withLink(lines, url);
   }
 
   /// Ответ ассистента в виде строк для SMS: без маркеров списка, с точкой
@@ -670,12 +755,6 @@ class SmsService {
         'Спутниковые данные поля: FIELD ${record.fieldId} NDVI 90D',
       ]),
     ];
-    final url = await reports.publish(
-      ownerHash: phoneHash(sms.from),
-      title: 'Поле ${record.fieldId}${cropName == null ? '' : ' · $cropName'}',
-      sections: sections,
-    );
-
     final summary = <String>[
       'AGROFY: поле ${record.fieldId}${cropName == null ? '' : ' ($cropName)'}.',
       if (best != null && !best.isCurrent)
@@ -685,7 +764,36 @@ class SmsService {
       else
         'Культура не указана — севооборот не рассчитан.',
     ];
-    return SmsOutcome([_withLink(summary, url)]);
+
+    // Текстом, по страницам: сначала главное.
+    final parts = <String>[
+      'AGROFY: поле ${record.fieldId}${cropName == null ? '' : ' ($cropName)'}, '
+          '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)}.',
+      if (result.blocker != null)
+        'Культура не указана — севооборот не рассчитан. Отправьте: REG ${record.fieldId} '
+            '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)} ХЛОПОК.'
+      else ...[
+        if (best != null && !best.isCurrent)
+          'Совет: «${best.title}» — ${best.sequenceLabel}, ${best.total.round()} из 100.'
+        else if (best != null)
+          'Текущий севооборот лучший: ${best.total.round()} из 100.',
+        'Варианты: ${result.strategies.map((s) => '${s.title} ${s.total.round()} (полив ${s.avgIrrigationMm.round()} мм)').join('; ')}.',
+        ...ask('Когда сеять ${cropName ?? ''}?'),
+        ...ask('Что если будет засуха?').skip(1),
+      ],
+      ...ask('Как меняется климат?'),
+    ];
+
+    return SmsOutcome([
+      await _long(
+        sms,
+        conversation,
+        parts,
+        title: 'Поле ${record.fieldId}${cropName == null ? '' : ' · $cropName'}',
+        sections: () => sections,
+        shortParts: summary,
+      ),
+    ]);
   }
 
   static Field _fieldOf(FieldRecord? record) => Field(
