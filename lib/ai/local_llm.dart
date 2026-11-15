@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -45,6 +46,13 @@ class LocalLlm extends ChangeNotifier {
 
   /// Файл меньше этого размера считается недокачанным.
   static const int _minValidBytes = 400 * 1024 * 1024;
+
+  /// llama.cpp собирается только для 64-битных процессоров: на 32-битных
+  /// Android-телефонах модель не запустится, скачивать её бессмысленно.
+  static bool get supported =>
+      !(Platform.isAndroid &&
+          (Abi.current() == Abi.androidArm ||
+              Abi.current() == Abi.androidIA32));
 
   LlmStatus _status = LlmStatus.unknown;
   double _progress = 0;

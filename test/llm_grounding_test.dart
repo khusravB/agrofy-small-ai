@@ -62,6 +62,25 @@ void main() {
     expect(LlmGrounding.isAcceptable(output, facts: facts), isFalse);
   });
 
+  test('культура не из фактов отклоняется, даже если она в вопросе', () {
+    // Реальный ответ Qwen2.5-0.5B на Android-эмуляторе.
+    const facts = 'Советую вариант «Экономия воды»: Пшеница озимая → '
+        'Бахчевые (дыня, арбуз) → Нут. Оценка 75 из 100 против 59.';
+    const output = 'Посаживать хлопку можно после хлопка. Это культура '
+        'высокой засухоустойчивости. Можно использовать бахчевые (дыня, '
+        'арбуз) или нут.';
+
+    expect(LlmGrounding.inventedCrops(output, facts: facts), {'cotton'});
+    expect(
+      LlmGrounding.isAcceptable(
+        output,
+        facts: facts,
+        question: 'Что посеять после хлопка?',
+      ),
+      isFalse,
+    );
+  });
+
   test('пустой или слишком короткий ответ отклоняется', () {
     expect(LlmGrounding.isAcceptable('', facts: facts), isFalse);
     expect(LlmGrounding.isAcceptable('Да.', facts: facts), isFalse);

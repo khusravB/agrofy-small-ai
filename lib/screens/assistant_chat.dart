@@ -346,6 +346,24 @@ class _ModelBanner extends StatelessWidget {
     String subtitle;
     Widget? action;
 
+    if (!LocalLlm.supported) {
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEAF4EE),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text(
+          'Языковая модель на этом телефоне недоступна: нужен 64-битный '
+          'процессор. Ответы остаются точными, но без пояснения простыми '
+          'словами.',
+          style: TextStyle(fontSize: 13, height: 1.4),
+        ),
+      );
+    }
+
     switch (status) {
       case LlmStatus.unknown:
         return const SizedBox.shrink();

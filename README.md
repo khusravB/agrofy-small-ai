@@ -143,6 +143,24 @@ chosen by the developers; they have not been reviewed by a local agronomist.
 The tool supports — and does not replace — the farmer's judgment and local
 agronomic expertise.
 
+## Android
+
+```bash
+flutter build apk --release --split-per-abi
+```
+
+- `app-arm64-v8a-release.apk` (~45 MB) — modern phones, with the language model.
+- `app-armeabi-v7a-release.apk` (~20 MB) — old 32-bit phones; everything works
+  except the optional language model, which needs a 64-bit CPU.
+- Only the llama.cpp CPU runtime is bundled (`hooks.user_defines` in
+  `pubspec.yaml`); LiteRT-LM, Vulkan and WebGPU are excluded.
+- Release builds are signed with the debug key and use the placeholder
+  application id `com.example.agrofy_small_ai`: fine for installing directly,
+  not for Google Play.
+- Tested on an Android 17 (API 37) arm64 emulator: launch, schema upgrade of an
+  existing install, model import from Downloads with SHA-256 check, and
+  on-device generation.
+
 ## Run
 
 ```bash

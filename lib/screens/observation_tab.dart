@@ -169,6 +169,9 @@ class _ObservationTabState extends State<ObservationTab>
     // Языковая модель, если скачана, может добавить признаки — только
     // по схеме и только как предположения.
     final llm = LocalLlm.instance;
+    if (!LocalLlm.supported) {
+      return;
+    }
     await llm.refresh();
     if (!llm.available || !mounted) {
       return;

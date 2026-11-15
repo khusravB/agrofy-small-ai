@@ -101,3 +101,19 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# Нативные библиотеки llamadart: только llama.cpp (модели GGUF) на CPU.
+# LiteRT-LM, Vulkan и WebGPU приложению не нужны и добавляли ~60 МБ в APK.
+hooks:
+  user_defines:
+    llamadart:
+      llamadart_native_runtimes:
+        platforms:
+          android: [llama_cpp]
+      llamadart_native_backends:
+        platforms:
+          android-arm64:
+            backends: [cpu]
+            cpu_profile: full
+          android-x64:
+            backends: [cpu]

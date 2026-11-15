@@ -1,3 +1,4 @@
+import '../decision/observation_interpreter.dart';
 import 'text_features.dart';
 
 /// Правила, по которым локальная языковая модель поясняет ответ
@@ -86,6 +87,16 @@ class LlmGrounding {
     return words.where(known.contains).length / words.length;
   }
 
+  /// Культуры, которые модель назвала, хотя их нет в фактах. Культура из
+  /// вопроса не в счёт: модель могла посоветовать её снова вопреки расчёту
+  /// («хлопок после хлопка»).
+  static Set<String> inventedCrops(String output, {required String facts}) {
+    final known = ObservationInterpreter.mentionedCropIds(facts).toSet();
+    return ObservationInterpreter.mentionedCropIds(output)
+        .toSet()
+        .difference(known);
+  }
+
   /// Можно ли показать пояснение модели рядом с точным ответом.
   static bool isAcceptable(
     String output, {
@@ -97,6 +108,7 @@ class LlmGrounding {
     return text.length >= 40 &&
         cyrillicShare(text) >= 0.8 &&
         overlap(text, facts: facts, question: question) >= 0.3 &&
+        inventedCrops(text, facts: facts).isEmpty &&
         inventedNumbers(text, facts: facts, question: question).isEmpty;
   }
 }
