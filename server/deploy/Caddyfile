@@ -1,0 +1,4 @@
+{$AGROFY_DOMAIN} {
+	encode gzip
+	reverse_proxy agrofy:8080
+}

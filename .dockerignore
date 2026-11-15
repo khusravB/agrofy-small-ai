@@ -1,0 +1,8 @@
+# Для образа сервера нужны только server/ и packages/agrofy_core/.
+*
+!server/
+!packages/agrofy_core/
+**/.dart_tool/
+**/build/
+server/data/
+server/.env

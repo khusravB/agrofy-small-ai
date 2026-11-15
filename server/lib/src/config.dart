@@ -82,6 +82,12 @@ class ServerConfig {
       if (provider == ProviderKind.twilio &&
           (twilioAccountSid == null || twilioAuthToken == null || twilioFrom == null))
         'Для Twilio нужны TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN и TWILIO_FROM.',
+      if (provider == ProviderKind.twilio && !publicUrl.startsWith('https://'))
+        'Для Twilio AGROFY_PUBLIC_URL должен быть публичным адресом https://… '
+            '(по нему проверяется подпись вебхука).',
+      if (provider == ProviderKind.twilio && auditSalt.length < 16)
+        'Задайте AGROFY_AUDIT_SALT (от 16 символов) — иначе хеши телефонов в '
+            'журнале легко подобрать.',
       if (provider == ProviderKind.generic &&
           (webhookSecret == null || webhookSecret!.length < 16))
         'Для универсального шлюза нужен AGROFY_WEBHOOK_SECRET (от 16 символов).',

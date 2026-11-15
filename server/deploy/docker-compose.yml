@@ -1,0 +1,31 @@
+# AGROFY SMS на VPS: сервер + Caddy (автоматический HTTPS от Let's Encrypt).
+# Запуск из папки server/deploy:  docker compose up -d --build
+services:
+  agrofy:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    env_file: .env
+    environment:
+      AGROFY_PUBLIC_URL: https://${AGROFY_DOMAIN}
+    volumes:
+      - agrofy-data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      AGROFY_DOMAIN: ${AGROFY_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - agrofy
+    restart: unless-stopped
+
+volumes:
+  agrofy-data:
+  caddy-data:

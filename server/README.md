@@ -101,6 +101,18 @@ dart test
 
 ## Deploy
 
+Step-by-step guide for a VPS with Docker, Caddy (automatic HTTPS) and Twilio:
+[deploy/README.md](deploy/README.md) (in Russian). The image is built from the
+repository root:
+
+```bash
+docker build -f server/Dockerfile -t agrofy-sms .
+```
+
+Note: Twilio does not support two-way SMS in Tajikistan and has no local
+numbers there, so a Twilio number suits a demo; a pilot needs a local gateway
+(`generic` provider) or an operator contract.
+
 The server is a single Dart process with a JSON state file; any host that runs
 Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 

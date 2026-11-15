@@ -166,6 +166,25 @@ class Harness {
 }
 
 void main() {
+  group('Конфигурация', () {
+    test('Twilio в продакшене: нужны https и своя соль', () {
+      final base = {
+        'AGROFY_SMS_PROVIDER': 'twilio',
+        'TWILIO_ACCOUNT_SID': 'AC1',
+        'TWILIO_AUTH_TOKEN': 'token',
+        'TWILIO_FROM': '+15550000000',
+      };
+      expect(ServerConfig.fromEnvironment(base).problems(), hasLength(2));
+      final ok = ServerConfig.fromEnvironment({
+        ...base,
+        'AGROFY_PUBLIC_URL': 'https://203.0.113.10.sslip.io/',
+        'AGROFY_AUDIT_SALT': '0123456789abcdef0123',
+      });
+      expect(ok.problems(), isEmpty);
+      expect(ok.publicUrl, 'https://203.0.113.10.sslip.io');
+    });
+  });
+
   group('Длина SMS', () {
     test('кириллица — 70 знаков в одном SMS, 67 в части', () {
       expect(SmsText.segments('а' * 70), 1);
