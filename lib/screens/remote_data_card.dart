@@ -295,9 +295,9 @@ class _RemoteDataCardState extends State<RemoteDataCard> {
         children: [
           const Text(
             'Без интернета: запрос уходит обычным SMS, сервер AGROFY берёт '
-            'данные NASA и отвечает текстом в SMS. Длинный ответ приходит '
-            'частями — отправьте ЕЩЁ, чтобы получить следующую. Отправляете '
-            'вы сами; SMS — по тарифу оператора.',
+            'данные NASA и отвечает текстом в SMS; длинный ответ приходит '
+            'несколькими сообщениями. Отправляете вы сами; SMS — по тарифу '
+            'оператора.',
             style: TextStyle(color: Colors.black54, height: 1.4),
           ),
           const SizedBox(height: 8),

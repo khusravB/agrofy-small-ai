@@ -17,7 +17,7 @@ enum SmsCommandType {
   /// Список полей этого номера: FIELDS.
   listFields,
 
-  /// Следующая страница длинного ответа: ЕЩЁ.
+  /// Следующая часть длинного ответа: ЕЩЁ (или все сразу: ВСЁ).
   more,
   question,
 }
@@ -132,6 +132,11 @@ class SmsCommand {
 
     if (words.length == 1 && _keywords.containsKey(head)) {
       return SmsCommand(_keywords[head]!);
+    }
+
+    // ВСЁ — все оставшиеся части длинного ответа сразу.
+    if (words.length == 1 && const {'ВСЁ', 'ВСЕ', 'ALL'}.contains(head)) {
+      return const SmsCommand(SmsCommandType.more, text: 'all');
     }
 
     if (head == 'REG' || head == 'РЕГ') {

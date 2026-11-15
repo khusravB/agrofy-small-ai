@@ -117,9 +117,9 @@ itself never reads SMS.
 - **Field report by SMS, no internet needed.** `INFO F5` (button «Всё о
   поле») returns everything the server knows about the field — rotations with
   scores and irrigation, sowing dates, a drought year, NASA climate and trends —
-  as SMS pages: each ends with `(1/6) ЕЩЁ`, and the farmer sends `ЕЩЁ` for the
-  next one. Any long answer works the same way. Links to a web version are an
-  optional server setting.
+  as several numbered SMS sent at once. Any long answer works the same way; the
+  server can limit how many go out at once (the rest on `ЕЩЁ`). Links to a web
+  version are an optional server setting.
 - **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые
   данные» prepares `REG F5 lat,lon CROP`, `FIELD F5 NDVI 3M` or
   `FIELD F5 CLIMATE 1Y`. The server fetches MODIS NDVI (MOD13Q1, ORNL DAAC)

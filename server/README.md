@@ -17,8 +17,8 @@ gives; no cloud language model is called.
 | `HELP` / `ПОМОЩЬ` / `?` | Short list of commands |
 | `REG F1 40.28,69.62 ХЛОПОК` / `РЕГ …` | Registers field F1 for this phone, downloads NASA POWER climate for it once |
 | `FIELD F1` / `ПОЛЕ F1` | Makes F1 the active field for questions |
-| `INFO F1` / `ИНФО F1` (or `INFO` for the active field) | Everything about the field, page by page: recommended and all rotations with scores and irrigation, sowing dates, drought year, climate, year types and trends |
-| `ЕЩЁ` / `MORE` | Next page of a long answer |
+| `INFO F1` / `ИНФО F1` (or `INFO` for the active field) | Everything about the field, in several SMS: recommended and all rotations with scores and irrigation, sowing dates, drought year, climate, year types and trends |
+| `ЕЩЁ` / `MORE`, `ВСЁ` / `ALL` | Next waiting parts of a long answer, or all of them (only when `AGROFY_PAGES_AT_ONCE` is below the number of parts) |
 | `FIELDS` / `ПОЛЯ` | Fields registered from this phone |
 | `FIELD F1 NDVI 90D` | MODIS NDVI package for F1 (default 90 days, max 366) |
 | `FIELD F1 CLIMATE 1Y` | NASA POWER daily temperature and rainfall (default 1 year, max 3) |
@@ -34,12 +34,14 @@ Periods: `90D`, `3M`, `1Y` (days, months, years). Russian works too:
 `ПОСЕВ`, `ДАННЫЕ`; periods `Д`, `М`, `Г`).
 
 **Everything works without mobile internet.** An answer that does not fit
-one SMS is split into pages of whole sentences: the first page ends with
-`(1/4) ЕЩЁ`, and the farmer sends `ЕЩЁ` (or `MORE`, `ДАЛЬШЕ`) for the next one,
-so they decide how many SMS to read and pay for. Pages are kept for 24 hours
-and dropped by the next new message; at most `AGROFY_MAX_PAGES` (default 8)
-pages per answer. Observation replies put the action and the "не диагноз"
-caveat on page 1 and the reasons, plan and options on the next pages.
+one SMS is split into parts of whole sentences, numbered `(1/4)`…`(4/4)`, and
+all parts are sent at once, in order; most phones show them one after another
+in the same chat. `AGROFY_PAGES_AT_ONCE` limits how many parts go out at once
+(default: all, up to `AGROFY_MAX_PAGES`, default 8); the rest wait, the last
+part sent ends with `Дальше: ЕЩЁ`, and the farmer sends `ЕЩЁ` for the next
+parts or `ВСЁ` for all of them. Waiting parts are kept for 24 hours and dropped
+by the next new message. Observation replies put the action and the
+"не диагноз" caveat in part 1 and the reasons, plan and options after it.
 
 Data requests arrive as text too: NDVI as dates and values
 (`14.09 0.18; 30.09 0.22; 16.10 0.13 обл.`, monthly means for `HISTORY`),
@@ -153,7 +155,8 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
 | `AGROFY_MAX_REPLY_SEGMENTS` | SMS segments per page (default 3) |
-| `AGROFY_MAX_PAGES` | Pages per long answer (default 8) |
+| `AGROFY_MAX_PAGES` | Parts per long answer (default 8) |
+| `AGROFY_PAGES_AT_ONCE` | Parts sent at once; the rest on `ЕЩЁ` (default: all) |
 | `AGROFY_REPORT_LINKS` | `true` adds links to web reports and package files (default off: text only) |
 
 Vonage: create an application with the Messages capability, Inbound URL

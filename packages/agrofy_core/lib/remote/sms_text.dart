@@ -90,10 +90,12 @@ class SmsText {
     return '${kept.join(' ')}$suffix';
   }
 
-  /// Подпись страницы: « (1/3) ЕЩЁ» — дальше есть продолжение,
-  /// « (3/3)» — последняя.
-  static String pageMark(int page, int total) =>
-      page < total ? ' ($page/$total) ЕЩЁ' : ' ($page/$total)';
+  /// Номер части: « (2/5)».
+  static String pageMark(int page, int total) => ' ($page/$total)';
+
+  /// Дописывается к последней отправленной части, если остальные ждут
+  /// команды.
+  static const String moreHint = 'Дальше: ЕЩЁ';
 
   /// Делит длинный текст на SMS-страницы целыми предложениями (слишком
   /// длинное предложение — по словам). Каждая страница с подписью
@@ -104,7 +106,7 @@ class SmsText {
     int maxSegments = 3,
     int maxPages = 10,
   }) {
-    final reserve = pageMark(maxPages, maxPages + 1);
+    final reserve = '${pageMark(maxPages, maxPages)} $moreHint';
     bool fits(String text) => segments('$text$reserve') <= maxSegments;
 
     final pieces = <String>[];

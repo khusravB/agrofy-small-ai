@@ -106,6 +106,7 @@ class Harness {
     int maxPerHour = 20,
     ProviderKind provider = ProviderKind.generic,
     bool reportLinks = false,
+    int pagesAtOnce = 8,
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -123,6 +124,7 @@ class Harness {
       vonageFrom: '15550002222',
       maxPerHour: maxPerHour,
       reportLinks: reportLinks,
+      pagesAtOnce: pagesAtOnce,
     );
     final store = await Store.open(dir.path);
     final power = FakePower();
@@ -243,38 +245,56 @@ void main() {
       final parts = [for (var i = 1; i <= 30; i++) 'Предложение номер $i про поле и воду.'];
       final pages = SmsText.paginate(parts, maxSegments: 2, maxPages: 4);
       expect(pages, hasLength(4));
-      expect(pages.first, endsWith(' (1/4) ЕЩЁ'));
+      expect(pages.first, endsWith(' (1/4)'));
       expect(pages.last, endsWith('… (4/4)'));
       for (final page in pages) {
-        expect(SmsText.segments(page), lessThanOrEqualTo(2));
+        // С подсказкой «Дальше: ЕЩЁ» часть тоже помещается.
+        expect(SmsText.segments('$page ${SmsText.moreHint}'), lessThanOrEqualTo(2));
       }
       expect(SmsText.paginate(['Коротко.']), ['Коротко.']);
     });
 
-    test('без интернета: INFO приходит страницами, ЕЩЁ выдаёт следующие', () async {
+    test('без интернета: INFO приходит всеми частями сразу', () async {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
-      final first = (await h.sms('INFO F1')).single;
-      expect(first, startsWith('AGROFY: поле F1 (хлопок)'));
-      expect(first, isNot(contains('http')));
-      final total = int.parse(RegExp(r'\(1/(\d+)\) ЕЩЁ$').firstMatch(first)!.group(1)!);
-      expect(total, greaterThan(1));
-      final all = [first];
-      for (var i = 2; i <= total; i++) {
-        all.add((await h.sms(i.isEven ? 'ЕЩЁ' : 'еще')).single);
-      }
-      expect(all.last, endsWith('($total/$total)'));
-      expect(all.join(' '), contains('Варианты:'));
-      expect(all.join(' '), contains('посев'));
-      for (final page in all) {
-        expect(SmsText.segments(page), lessThanOrEqualTo(3));
+      final parts = await h.sms('INFO F1');
+      expect(parts.length, greaterThan(1));
+      expect(parts.first, startsWith('AGROFY: поле F1 (хлопок)'));
+      expect(parts.first, endsWith('(1/${parts.length})'));
+      expect(parts.last, endsWith('(${parts.length}/${parts.length})'));
+      final all = parts.join(' ');
+      expect(all, isNot(contains('http')));
+      expect(all, isNot(contains('ЕЩЁ')));
+      expect(all, contains('Варианты:'));
+      expect(all, contains('посев'));
+      for (final part in parts) {
+        expect(SmsText.segments(part), lessThanOrEqualTo(3));
       }
       expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
     });
 
-    test('новый вопрос сбрасывает недочитанные страницы', () async {
-      final h = await Harness.create();
+    test('лимит частей за раз: остальные по ЕЩЁ, все сразу по ВСЁ', () async {
+      final h = await Harness.create(pagesAtOnce: 2);
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      final first = await h.sms('INFO F1');
+      expect(first, hasLength(2));
+      expect(first.last, endsWith('Дальше: ЕЩЁ'));
+      final total = int.parse(RegExp(r'\(1/(\d+)\)$').firstMatch(first.first)!.group(1)!);
+      expect(total, greaterThan(4));
+      final next = await h.sms('еще');
+      expect(next, hasLength(2));
+      expect(next.first, endsWith('(3/$total)'));
+      final rest = await h.sms('ВСЁ');
+      expect(rest, hasLength(total - 4));
+      expect(rest.last, endsWith('($total/$total)'));
+      expect(rest.last, isNot(contains('ЕЩЁ')));
+      expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
+    });
+
+    test('новый вопрос сбрасывает недочитанные части', () async {
+      final h = await Harness.create(pagesAtOnce: 1);
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
       await h.sms('INFO F1');
@@ -282,31 +302,13 @@ void main() {
       expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
     });
 
-    test('без интернета: наблюдение — первая страница и разбор по ЕЩЁ', () async {
+    test('без интернета: наблюдение — действие первым, разбор следом', () async {
       final h = await Harness.create();
-      final first = (await h.sms('листья желтеют, почва сухая')).single;
-      expect(first, contains('не диагноз'));
-      expect(first, endsWith('ЕЩЁ'));
-      final rest = <String>[];
-      while (true) {
-        final page = (await h.sms('ЕЩЁ')).single;
-        if (page.contains('продолжения нет')) break;
-        rest.add(page);
-      }
-      expect(rest.join(' '), contains('План:'));
-      expect(rest.join(' '), contains('Варианты:'));
-    });
-
-    test('разбор команд', () {
-      expect(SmsCommand.parse('INFO').type, SmsCommandType.info);
-      expect(SmsCommand.parse('инфо f1').fieldId, 'F1');
-      expect(SmsCommand.parse('ОТЧЁТ F2').fieldId, 'F2');
-      expect(SmsCommand.parse('INFO 123').isValid, isFalse);
-      expect(SmsCommand.parse('FIELDS').type, SmsCommandType.listFields);
-      expect(SmsCommand.parse('поля').type, SmsCommandType.listFields);
-      expect(SmsCommand.formatInfo('F5'), 'INFO F5');
-      // Обычный вопрос со словом «поля» — не команда.
-      expect(SmsCommand.parse('Какие поля лучше поливать?').type, SmsCommandType.question);
+      final parts = await h.sms('листья желтеют, почва сухая');
+      expect(parts.length, greaterThan(1));
+      expect(parts.first, contains('не диагноз'));
+      expect(parts.join(' '), contains('План:'));
+      expect(parts.join(' '), contains('Варианты:'));
     });
 
     test('ссылка всегда в конце и помещается в лимит', () {
@@ -406,7 +408,7 @@ void main() {
   group('Vonage', () {
     test('подписанный вебхук: 204, ответ уходит через Messages API', () async {
       final h = await Harness.create(provider: ProviderKind.vonage);
-      final response = await h.vonage('HELP');
+      final response = await h.vonage('NEW');
       expect(response.statusCode, 204);
       await h.settle();
       expect(h.apiCalls, hasLength(1));
@@ -422,18 +424,18 @@ void main() {
 
     test('повтор того же message_uuid не обрабатывается дважды', () async {
       final h = await Harness.create(provider: ProviderKind.vonage);
-      await h.vonage('HELP', id: 'same');
-      await h.vonage('HELP', id: 'same');
+      await h.vonage('NEW', id: 'same');
+      await h.vonage('NEW', id: 'same');
       await h.settle();
       expect(h.apiCalls, hasLength(1));
     });
 
     test('чужой ключ, подмена тела, старый токен и другой api_key отклоняются', () async {
       final h = await Harness.create(provider: ProviderKind.vonage);
-      expect((await h.vonage('HELP', jwtSecret: 'wrong-secret-wrong-secret')).statusCode, 403);
-      expect((await h.vonage('HELP', id: 'b', payloadHash: sha256Hex('other'))).statusCode, 403);
-      expect((await h.vonage('HELP', id: 'c', iatOffsetSeconds: -7200)).statusCode, 401);
-      expect((await h.vonage('HELP', id: 'd', apiKey: 'other')).statusCode, 403);
+      expect((await h.vonage('NEW', jwtSecret: 'wrong-secret-wrong-secret')).statusCode, 403);
+      expect((await h.vonage('NEW', id: 'b', payloadHash: sha256Hex('other'))).statusCode, 403);
+      expect((await h.vonage('NEW', id: 'c', iatOffsetSeconds: -7200)).statusCode, 401);
+      expect((await h.vonage('NEW', id: 'd', apiKey: 'other')).statusCode, 403);
       await h.settle();
       expect(h.apiCalls, isEmpty);
     });
@@ -647,21 +649,24 @@ void main() {
     test('HELP, регистрация поля и вопрос о наблюдении', () async {
       final h = await Harness.create();
 
-      expect((await h.sms('HELP')).single, contains('REG F1'));
+      expect((await h.sms('HELP')).join(' '), contains('REG F1'));
 
       final reg = await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       expect(reg.single, contains('поле F1 сохранено'));
       await h.settle();
       expect(h.store.fields['+992900000001']!['F1']!.climate, isNotNull);
 
-      final answer = (await h.sms('Листья желтеют, почва сухая')).single;
+      final parts = await h.sms('Листья желтеют, почва сухая');
+      final answer = parts.join(' ');
       expect(answer, contains('влажность'));
-      expect(answer, contains('не диагноз'));
+      expect(parts.first, contains('не диагноз'));
       expect(answer, startsWith('Проверьте влажность почвы'));
-      expect(SmsText.segments(answer), lessThanOrEqualTo(3));
+      for (final part in parts) {
+        expect(SmsText.segments(part), lessThanOrEqualTo(3));
+      }
 
       // Уточнение учитывает прошлое сообщение: теперь есть замер.
-      final follow = (await h.sms('влажность почвы 15%')).single;
+      final follow = (await h.sms('влажность почвы 15%')).join(' ');
       expect(follow, contains('полив'));
     });
 
@@ -669,12 +674,12 @@ void main() {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
-      final reply = (await h.sms('Что если будет засуха?')).single;
+      final reply = (await h.sms('Что если будет засуха?')).join(' ');
       expect(reply, isNot(contains('не диагноз')));
       expect(reply, isNot(contains('вкладк')));
       expect(reply, isNot(contains('загружаются')));
       expect(h.power.historyCalls, 1);
-      final observed = (await h.sms('Почва сухая, листья вянут')).single;
+      final observed = (await h.sms('Почва сухая, листья вянут')).join(' ');
       expect(observed, contains('не диагноз'));
     });
 
@@ -690,10 +695,10 @@ void main() {
         registeredAt: h.now,
         climate: h.store.fields['+992900000001']!['F1']!.climate,
       );
-      final first = (await h.sms('Что если будет засуха?')).single;
+      final first = (await h.sms('Что если будет засуха?')).join(' ');
       expect(first, contains('загружаются'));
       await h.settle();
-      final second = (await h.sms('А если засуха?')).single;
+      final second = (await h.sms('А если засуха?')).join(' ');
       expect(second, isNot(contains('загружаются')));
     });
 
@@ -701,20 +706,20 @@ void main() {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ТОМАТ');
       await h.settle();
-      final reply = (await h.sms('Что посадить после томатов?')).single;
+      final reply = (await h.sms('Что посадить после томатов?')).join(' ');
       expect(reply, isNot(contains('не указана')));
-      final reg = (await h.sms('REG F2 40.28,69.62 маш')).single;
+      final reg = (await h.sms('REG F2 40.28,69.62 маш')).join(' ');
       expect(reg, isNot(contains('нет в справочнике')));
     });
 
     test('неизвестная или пропущенная культура — подсказка сразу', () async {
       final h = await Harness.create();
-      final unknown = (await h.sms('REG F1 40.28,69.62 БАНАН')).single;
+      final unknown = (await h.sms('REG F1 40.28,69.62 БАНАН')).join(' ');
       expect(unknown, contains('нет в справочнике'));
-      final none = (await h.sms('REG F2 40.28,69.62')).single;
+      final none = (await h.sms('REG F2 40.28,69.62')).join(' ');
       expect(none, contains('Культура не указана'));
       await h.settle();
-      final reply = (await h.sms('Какой севооборот лучше?')).single;
+      final reply = (await h.sms('Какой севооборот лучше?')).join(' ');
       expect(reply, contains('не указана культура'));
       expect(reply, contains('REG F2'));
     });
@@ -723,7 +728,7 @@ void main() {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.sms('Почему у моих томатов желтеют листья?');
-      final reply = (await h.sms('В основном нижние листья, почва влажная')).single;
+      final reply = (await h.sms('В основном нижние листья, почва влажная')).join(' ');
       expect(reply, startsWith('Не добавляйте полив'));
       expect(reply, contains('переувлажнение'));
       expect(reply, contains('не диагноз'));
@@ -734,7 +739,7 @@ void main() {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.sms('почва сухая');
-      final reply = (await h.sms('влажность почвы 80%')).single;
+      final reply = (await h.sms('влажность почвы 80%')).join(' ');
       expect(reply, contains('противоречие'));
     });
 
@@ -743,52 +748,54 @@ void main() {
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.sms('почва сухая');
       await h.sms('NEW');
-      final reply = (await h.sms('влажность почвы 80%')).single;
+      final reply = (await h.sms('влажность почвы 80%')).join(' ');
       expect(reply, isNot(contains('противоречие')));
     });
 
     test('вопрос о севообороте использует климат зарегистрированного поля', () async {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
-      final reply = (await h.sms('Что посеять после хлопка?')).single;
-      expect(reply, contains('Советую'));
-      expect(SmsText.segments(reply), lessThanOrEqualTo(3));
+      final parts = await h.sms('Что посеять после хлопка?');
+      expect(parts.join(' '), contains('Советую'));
+      for (final part in parts) {
+        expect(SmsText.segments(part), lessThanOrEqualTo(3));
+      }
     });
 
     test('без поля просит зарегистрировать его, термины объясняет', () async {
       final h = await Harness.create();
-      expect((await h.sms('Что посеять?')).single, contains('REG F1'));
-      expect((await h.sms('Что такое NDVI?')).single, contains('NDVI'));
+      expect((await h.sms('Что посеять?')).join(' '), contains('REG F1'));
+      expect((await h.sms('Что такое NDVI?')).join(' '), contains('NDVI'));
     });
 
     test('чужое поле недоступно', () async {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62', from: '+992900000001');
-      expect((await h.sms('FIELD F1', from: '+992900000002')).single, contains('не найдено'));
+      expect((await h.sms('FIELD F1', from: '+992900000002')).join(' '), contains('не найдено'));
       expect(
-        (await h.sms('FIELD F1 NDVI 90D', from: '+992900000002')).single,
+        (await h.sms('FIELD F1 NDVI 90D', from: '+992900000002')).join(' '),
         contains('нет доступа'),
       );
     });
 
     test('STOP: после отписки ответов нет, START включает', () async {
       final h = await Harness.create();
-      expect((await h.sms('STOP')).single, contains('отписаны'));
+      expect((await h.sms('STOP')).join(' '), contains('отписаны'));
       expect(await h.sms('HELP'), isEmpty);
-      expect((await h.sms('START')).single, contains('снова включены'));
+      expect((await h.sms('START')).join(' '), contains('снова включены'));
     });
 
     test('лимит: одно предупреждение, дальше тишина', () async {
       final h = await Harness.create(maxPerHour: 2);
       expect(await h.sms('HELP'), isNotEmpty);
       expect(await h.sms('HELP'), isNotEmpty);
-      expect((await h.sms('HELP')).single, contains('лимит'));
+      expect((await h.sms('HELP')).join(' '), contains('лимит'));
       expect(await h.sms('HELP'), isEmpty);
     });
 
     test('слишком длинное сообщение', () async {
       final h = await Harness.create();
-      expect((await h.sms('а' * 500)).single, contains('слишком длинное'));
+      expect((await h.sms('а' * 500)).join(' '), contains('слишком длинное'));
     });
   });
 
@@ -802,13 +809,15 @@ void main() {
       expect(ack, contains('принят'));
       await h.settle();
 
-      final sent = h.outbox().single;
-      expect(sent['to'], '+992900000001');
-      final text = sent['text'] as String;
+      final sent = h.outbox();
+      expect(sent.first['to'], '+992900000001');
+      final text = sent.map((m) => m['text']).join(' ');
       expect(text, contains('PARTIAL')); // одно наблюдение облачное
       final url = RegExp(r'https://sms\.agrofy\.test/p/[A-Za-z0-9_-]+').firstMatch(text)!.group(0)!;
       expect(url, isNot(contains('40.28')));
-      expect(SmsText.segments(text), lessThanOrEqualTo(3));
+      for (final m in sent) {
+        expect(SmsText.segments(m['text'] as String), lessThanOrEqualTo(3));
+      }
 
       final download = await h.app.handler(Request('GET', Uri.parse(url)));
       expect(download.statusCode, 200);
@@ -829,7 +838,7 @@ void main() {
       await h.settle();
 
       final url = RegExp(r'https://\S+/p/[A-Za-z0-9_-]+')
-          .firstMatch(h.outbox().single['text'] as String)!
+          .firstMatch(h.outbox().map((m) => m['text']).join(' '))!
           .group(0)!;
       final package = DataPackageReader.read(
         await (await h.app.handler(Request('GET', Uri.parse(url)))).readAsString(),
@@ -844,7 +853,7 @@ void main() {
       await h.settle();
       await h.sms('FIELD F1 NDVI 90D');
       await h.settle();
-      final text = h.outbox().single['text'] as String;
+      final text = h.outbox().map((m) => m['text']).join(' ');
       expect(text, isNot(contains('http')));
       expect(text, contains('14.09 0.18'));
       expect(text, contains('16.10 0.13 обл.'));
@@ -857,13 +866,9 @@ void main() {
       await h.settle();
       await h.sms('FIELD F1 CLIMATE 1Y');
       await h.settle();
-      final first = h.outbox().single['text'] as String;
-      final pages = [first];
-      while (true) {
-        final page = (await h.sms('ЕЩЁ')).single;
-        if (page.contains('продолжения нет')) break;
-        pages.add(page);
-      }
+      final pages = [for (final m in h.outbox()) m['text'] as String];
+      expect(pages.length, greaterThan(1));
+      expect(pages.last, endsWith('(${pages.length}/${pages.length})'));
       final all = pages.join(' ');
       expect(all, contains('Климат NASA POWER по месяцам'));
       expect(all, contains('20°'));

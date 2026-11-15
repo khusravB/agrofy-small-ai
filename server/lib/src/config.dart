@@ -42,6 +42,10 @@ class ServerConfig {
 
   /// Сколько страниц (SMS) может быть у одного длинного ответа.
   final int maxPages;
+
+  /// Сколько частей длинного ответа отправлять сразу, без команды ЕЩЁ.
+  /// По умолчанию — все (до [maxPages]).
+  final int pagesAtOnce;
   final Duration packageTtl;
   final Duration contextTtl;
 
@@ -66,6 +70,7 @@ class ServerConfig {
     this.maxReplySegments = 3,
     this.reportLinks = false,
     this.maxPages = 8,
+    this.pagesAtOnce = 8,
     this.packageTtl = const Duration(days: 7),
     this.contextTtl = const Duration(hours: 24),
   });
@@ -101,6 +106,7 @@ class ServerConfig {
       reportLinks: const {'1', 'true', 'yes', 'on'}
           .contains((e['AGROFY_REPORT_LINKS'] ?? '').toLowerCase()),
       maxPages: number('AGROFY_MAX_PAGES', 8),
+      pagesAtOnce: number('AGROFY_PAGES_AT_ONCE', number('AGROFY_MAX_PAGES', 8)),
     );
   }
 
