@@ -184,7 +184,7 @@ an optional 491 MB download.
 ## Demo and links
 
 - Demo (video ≤ 30 s with English subtitles, or ≤ 7 slides): [TODO: public link]
-- Final project (public repository): [TODO: link]
+- Final project (public repository): https://github.com/khusravB/agrofy-small-ai
 - Team name and members: [TODO]
 
 Suggested 30-second video:
