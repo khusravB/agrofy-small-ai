@@ -6,6 +6,8 @@
         android:label="agrofy_small_ai"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Необязательное GPU-ускорение для llama.cpp; без библиотеки работает на CPU. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

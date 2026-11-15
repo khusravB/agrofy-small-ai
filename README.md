@@ -12,19 +12,27 @@ Interface language: Russian. Demo region: Sughd region, Tajikistan.
 
 ## What "Small AI" means here
 
-Three small models that train and run on the device, in pure Dart, with no cloud
-and no model download:
+Three small models train and run on the device in pure Dart, with no cloud and
+no model download. A fourth, optional one is a small generative language model:
 
 | Model | What it does | Method | Trained on |
 |---|---|---|---|
 | Year-type model | Splits the field's weather history into dry / normal / wet years and replays every rotation in each | k-means clustering (deterministic init) | 35 years of NASA POWER monthly data for the field's own coordinates |
 | Trend detector | Reports whether temperature, rainfall, evaporative demand and frost days are changing | Theil–Sen slope + Mann–Kendall test | Same history |
 | Question classifier | Understands the farmer's question in the chat tab | Multinomial naive Bayes over word stems and character trigrams | ~120 bundled example questions |
+| Language model (optional) | Adds a two-sentence plain-language note under each answer | Qwen2.5-0.5B-Instruct, 4-bit GGUF, run with llama.cpp via `llamadart` | Pre-trained; downloaded once (491 MB) on the farmer's request |
 
 Answers in the chat are assembled from the advisor's calculations and the offline
 knowledge base (BM25 retrieval), so the assistant cannot make facts up and always
 names its source. The rotation scoring itself is an explainable rule-based engine,
 not a neural network.
+
+The language model is never the source of facts. The exact answer is always
+shown; the model only adds a short note, and the note is dropped if it contains
+a number that is not in the facts, drifts off topic or is not in Russian
+(`lib/ai/llm_grounding.dart`). A 0.5B model writes imperfect Russian, so treat
+the note as a convenience, not as advice. Without the model the app works
+exactly the same, minus the note.
 
 ## Features
 
@@ -51,6 +59,7 @@ not a neural network.
 | [NASA GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) | Map layers: MODIS NDVI, SMAP L4 root-zone soil moisture, GPM IMERG precipitation, MODIS LST | Online map tiles |
 | [OpenStreetMap](https://www.openstreetmap.org/copyright) | Base map | Online map tiles |
 | FAO-56 (Allen et al., 1998) | Hargreaves reference evapotranspiration, crop coefficient approach | Method, implemented in code |
+| [Qwen2.5-0.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) (Apache 2.0) | Optional on-device language model | Downloaded once in the chat tab |
 
 Crop parameters in `lib/data/crop_catalog.dart` are generalized reference values
 chosen by the developers; they have not been reviewed by a local agronomist.
@@ -69,6 +78,8 @@ chosen by the developers; they have not been reviewed by a local agronomist.
 - SMAP, GPM and MODIS are shown as map layers; the numeric analysis uses
   NASA POWER and SRTM.
 - The UI is in Russian only.
+- The optional language model needs iOS 16.4+, about 500 MB of storage and
+  enough RAM; it has been run in the iOS Simulator only, not on a phone.
 
 The tool supports — and does not replace — the farmer's judgment and local
 agronomic expertise.

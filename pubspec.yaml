@@ -41,6 +41,9 @@ dependencies:
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
   http: ^1.6.0
+  llamadart: ^0.19.11
+  llamadart_llama_cpp_flutter: ^0.19.11
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

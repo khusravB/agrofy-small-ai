@@ -25,7 +25,8 @@ what evidence supports it, what benefits it may offer, where information gaps
 exist and which risks need local review. A small model trained on the phone
 sorts 35 years of the field's own weather into dry, normal and wet years and
 tests every rotation in each. A second small model powers an offline question
-assistant that answers only from the field's data and names its source.
+assistant that answers only from the field's data and names its source; an
+optional 0.5B language model on the phone adds a plain-language note.
 
 NASA data is downloaded once per field; after that the advisor, the models and
 the assistant run with no network and no data leaving the phone. The tool
@@ -72,13 +73,20 @@ English interfaces, and calibration against recorded yields.
 5. In the chat, a naive Bayes classifier identifies the question's intent and a
    BM25 retriever finds knowledge-base articles; the reply is assembled from
    advisor results.
+6. Optionally, Qwen2.5-0.5B-Instruct (4-bit GGUF, llama.cpp) runs on the phone
+   and adds a two-sentence note in plain language. The exact answer stays
+   visible, and the note is discarded if it introduces a number not present in
+   the facts, goes off topic or leaves Russian.
 
-Stack: Flutter / Dart, SQLite (sqflite), flutter_map. All models are pure Dart
-and add no download.
+Stack: Flutter / Dart, SQLite (sqflite), flutter_map, llamadart (llama.cpp).
+The three core models are pure Dart and add no download; the language model is
+an optional 491 MB download.
 
 ### Validity and limitations
-- 51 automated tests cover scoring, the models, NASA response parsing (real
-  responses saved as fixtures) and database migrations.
+- 59 automated tests cover scoring, the models, the language-model guard, NASA
+  response parsing (real responses saved as fixtures) and database migrations.
+- The language model has been run in the iOS Simulator only; its Russian is
+  imperfect, which is why it never replaces the exact answer.
 - Verified in the iOS Simulator with real NASA data for a field near Khujand.
 - Not yet validated against measured yields or reviewed by an agronomist; crop
   parameters are generalized reference values chosen by the team.
@@ -103,7 +111,8 @@ and add no download.
 
 ### Tools and technologies
 - Flutter, Dart
-- sqflite, flutter_map, latlong2, geolocator, http
+- sqflite, flutter_map, latlong2, geolocator, http, path_provider
+- llamadart / llama.cpp with Qwen2.5-0.5B-Instruct (GGUF)
 - NASA POWER API, NASA GIBS, OpenTopoData (SRTM)
 
 ## NASA Data
@@ -128,8 +137,11 @@ and add no download.
 - OpenStreetMap (https://www.openstreetmap.org/copyright) — base map, ODbL.
 - FAO Irrigation and Drainage Paper 56 — Hargreaves ET0 and crop-coefficient
   method.
+- Qwen2.5-0.5B-Instruct-GGUF
+  (https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) — Apache 2.0,
+  optional on-device language model.
 - Open-source packages: Flutter, sqflite, flutter_map, latlong2, geolocator,
-  http (see `pubspec.yaml`).
+  http, path_provider, llamadart (see `pubspec.yaml`).
 
 ## Use of AI
 
@@ -138,8 +150,11 @@ and add no download.
   results and tested the app in the iOS Simulator.
 - [TODO: confirm] ChatGPT / Codex was used earlier to produce the project
   brief.
-- The models inside the app (k-means, naive Bayes, BM25) are trained on the
-  device and are not generative; no large language model runs in the app.
+- Inside the app: k-means, naive Bayes and BM25 are trained or built on the
+  device and are not generative. An optional small generative model,
+  Qwen2.5-0.5B-Instruct (Alibaba Cloud, Apache 2.0), runs on the phone to
+  rephrase answers; its text is labelled in the chat and checked against the
+  computed facts.
 - No AI-generated images or video are used. [TODO: update if the demo uses any;
   they would need a visible watermark.]
 
