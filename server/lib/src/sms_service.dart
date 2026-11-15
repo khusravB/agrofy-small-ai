@@ -172,6 +172,8 @@ class SmsService {
 
       case SmsCommandType.register:
         final fields = store.fields.putIfAbsent(sms.from, () => {});
+        final cropText = command.text;
+        final cropKnown = _cropId(cropText) != null;
         final record = FieldRecord(
           fieldId: command.fieldId!,
           latitude: command.point!.latitude,
@@ -186,7 +188,13 @@ class SmsService {
             _fit([
               'AGROFY: поле ${command.fieldId} сохранено '
                   '(${command.point!.format()}'
-                  '${command.text == null ? '' : ', ${command.text!.toLowerCase()}'}).',
+                  '${cropText == null ? '' : ', ${cropText.toLowerCase()}'}).',
+              if (cropText == null)
+                'Культура не указана — советы по севообороту будут недоступны. '
+                    'Добавьте её: REG ${command.fieldId} ${command.point!.format()} ХЛОПОК.'
+              else if (!cropKnown)
+                'Культуры «${cropText.toLowerCase()}» нет в справочнике. '
+                    'Примеры: ХЛОПОК, ПШЕНИЦА, МАШ, ЛЮЦЕРНА, ТОМАТ.',
               'Вопросы теперь учитывают климат NASA этого поля.',
             ]),
           ],
@@ -352,12 +360,12 @@ class SmsService {
       latitude: record?.latitude,
       longitude: record?.longitude,
     );
-    final fieldCrop = CropCatalog.fromFieldCrop(field.crop)?.id;
+    final fieldCrop = _cropId(record?.crop);
 
     // 1. Наблюдение («листья желтеют, почва сухая») — через проверку данных
     //    и движок решений, с учётом фактов из прошлых сообщений диалога.
     final observation = _interpreter.interpret(text, date: now, fieldCropId: fieldCrop);
-    if (observation.facts.isNotEmpty) {
+    if (observation.facts.isNotEmpty && !_hypothetical.hasMatch(text.toLowerCase())) {
       final previous = conversation.facts == null
           ? const <ObservedFact>[]
           : FieldObservation.decodeFacts(conversation.facts!);
@@ -394,7 +402,11 @@ class SmsService {
     // 2. Вопрос — классификатор намерений и расчёты советника.
     final result = record == null
         ? null
-        : _advisor.advise(field: field, historyCropIds: const [], climate: climate);
+        : _advisor.advise(
+            field: field,
+            historyCropIds: fieldCrop == null ? const [] : [fieldCrop],
+            climate: climate,
+          );
     final answer = _assistant.answer(
       text,
       AssistantContext(
@@ -411,6 +423,15 @@ class SmsService {
       ]);
     }
 
+    if (record != null && result?.blocker != null && answer.text.contains(result!.blocker!)) {
+      return _fit([
+        'AGROFY: у поля ${record.fieldId} не указана культура из справочника.',
+        'Отправьте: REG ${record.fieldId} '
+            '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)} '
+            'ХЛОПОК (или ПШЕНИЦА, МАШ, ЛЮЦЕРНА…).',
+      ]);
+    }
+
     final lines = answer.text
         .split('\n')
         .map((l) => l.replaceFirst(RegExp(r'^[•\-\s]+'), '').trim())
@@ -418,6 +439,21 @@ class SmsService {
         .map((l) => RegExp(r'[.!?:;…]$').hasMatch(l) ? l : '$l.')
         .toList();
     return _fit(lines);
+  }
+
+  /// «Что если будет засуха?» — сценарий, а не наблюдение с поля.
+  static final RegExp _hypothetical = RegExp(
+    r'(^|[^а-яё])(что|а)\s+если([^а-яё]|$)|если\s+(будет|случится|придёт|ударит)|в\s+случае',
+  );
+
+  /// Культура из справочника по названию: «хлопок», «Хлопчатник»,
+  /// «томаты», «маш», таджикские названия.
+  static String? _cropId(String? text) {
+    if (text == null || text.trim().isEmpty) {
+      return null;
+    }
+    return CropCatalog.fromFieldCrop(text)?.id ??
+        ObservationInterpreter.mentionedCropIds(text).firstOrNull;
   }
 
   static String _cropName(String? text) {

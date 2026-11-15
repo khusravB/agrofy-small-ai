@@ -305,6 +305,23 @@ void main() {
   });
 
   group('Длина SMS', () {
+    test('ответ собирается целыми предложениями, без обрыва', () {
+      final long = 'Первое предложение про сроки сева хлопка в Согде. '
+          'Второе предложение про климат участка и заморозки весной. '
+          'Третье предложение про воду и полив в засушливые годы. '
+          'Четвёртое предложение, которое уже не поместится в два сегмента.';
+      final text = SmsText.fit([long], maxSegments: 2);
+      expect(SmsText.segments(text), lessThanOrEqualTo(2));
+      expect(text, endsWith('.'));
+      expect(text, isNot(contains('…')));
+      expect(text, startsWith('Первое'));
+    });
+
+    test('точка в числе не делит предложение', () {
+      expect(SmsText.sentences('NDVI 0.13 на 16.10.2026. Поле F1 40.28,69.62 сохранено.'),
+          ['NDVI 0.13 на 16.10.2026.', 'Поле F1 40.28,69.62 сохранено.']);
+    });
+
     test('кириллица — 70 знаков в одном SMS, 67 в части', () {
       expect(SmsText.segments('а' * 70), 1);
       expect(SmsText.segments('а' * 71), 2);
@@ -456,6 +473,38 @@ void main() {
       // Уточнение учитывает прошлое сообщение: теперь есть замер.
       final follow = (await h.sms('влажность почвы 15%')).single;
       expect(follow, contains('полив'));
+    });
+
+    test('«что если будет засуха» — сценарий, а не наблюдение', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      final reply = (await h.sms('Что если будет засуха?')).single;
+      expect(reply, isNot(contains('не диагноз')));
+      final observed = (await h.sms('Почва сухая, листья вянут')).single;
+      expect(observed, contains('не диагноз'));
+    });
+
+    test('культура томат и маш распознаются, советник работает', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ТОМАТ');
+      await h.settle();
+      final reply = (await h.sms('Что посадить после томатов?')).single;
+      expect(reply, isNot(contains('не указана')));
+      final reg = (await h.sms('REG F2 40.28,69.62 маш')).single;
+      expect(reg, isNot(contains('нет в справочнике')));
+    });
+
+    test('неизвестная или пропущенная культура — подсказка сразу', () async {
+      final h = await Harness.create();
+      final unknown = (await h.sms('REG F1 40.28,69.62 БАНАН')).single;
+      expect(unknown, contains('нет в справочнике'));
+      final none = (await h.sms('REG F2 40.28,69.62')).single;
+      expect(none, contains('Культура не указана'));
+      await h.settle();
+      final reply = (await h.sms('Какой севооборот лучше?')).single;
+      expect(reply, contains('не указана культура'));
+      expect(reply, contains('REG F2'));
     });
 
     test('уточнение из спецификации: нижние листья, почва влажная', () async {

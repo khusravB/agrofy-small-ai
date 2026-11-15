@@ -51,23 +51,31 @@ class SmsText {
     return (gsm ? 153 : 67) * maxSegments;
   }
 
-  /// Собирает ответ из частей по порядку важности: часть добавляется,
-  /// только если весь текст остаётся в пределах [maxSegments].
-  /// Первая часть обязательна и при необходимости обрезается по слову.
-  static String fit(List<String> parts, {int maxSegments = 3}) {
-    final clean = [
-      for (final part in parts)
-        if (part.trim().isNotEmpty) part.trim(),
-    ];
-    if (clean.isEmpty) {
-      return '';
-    }
+  /// Предложения текста. Точка внутри числа («0.13», «40.28,69.62») не
+  /// считается концом предложения.
+  static List<String> sentences(String text) => [
+        for (final s in text.trim().split(RegExp(r'(?<=[.!?…])\s+')))
+          if (s.trim().isNotEmpty) s.trim(),
+      ];
 
-    var text = truncate(clean.first, maxSegments);
-    for (final part in clean.skip(1)) {
-      final candidate = '$text $part';
-      if (segments(candidate) <= maxSegments) {
-        text = candidate;
+  /// Собирает ответ из частей по порядку важности, целыми предложениями:
+  /// предложение добавляется, только если весь текст остаётся в пределах
+  /// [maxSegments]; на первом не поместившемся предложении часть
+  /// заканчивается и начинается следующая. Обрезается по слову только первое
+  /// предложение, если оно одно длиннее лимита.
+  static String fit(List<String> parts, {int maxSegments = 3}) {
+    var text = '';
+    for (final part in parts) {
+      for (final sentence in sentences(part)) {
+        final candidate = text.isEmpty ? sentence : '$text $sentence';
+        if (segments(candidate) <= maxSegments) {
+          text = candidate;
+        } else {
+          if (text.isEmpty) {
+            text = truncate(sentence, maxSegments);
+          }
+          break;
+        }
       }
     }
     return text;
