@@ -1,10 +1,10 @@
 import 'dart:io';
 
-import 'package:agrofy_small_ai/data/crop_catalog.dart';
-import 'package:agrofy_small_ai/data/region_profile.dart';
-import 'package:agrofy_small_ai/models/climate_summary.dart';
-import 'package:agrofy_small_ai/models/field.dart';
-import 'package:agrofy_small_ai/services/rotation_advisor.dart';
+import 'package:agrofy_core/data/crop_catalog.dart';
+import 'package:agrofy_core/data/region_profile.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/services/rotation_advisor.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Климатология NASA POWER для точки под Худжандом (40.28° с. ш.,

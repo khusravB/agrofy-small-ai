@@ -58,6 +58,12 @@ English interfaces, and calibration against recorded yields.
   dry") into structured facts with sources, flags missing data and
   contradictions, and proposes a cautious next step with a plan.
 - Tracks the crop through eight lifecycle stages and keeps a field timeline.
+- Works over plain SMS when there is signal but no data: the app opens the
+  phone's SMS app with a prepared question or data request, and an AGROFY SMS
+  server answers with the same decision engine, or sends a link to a NASA data
+  package (MODIS NDVI or NASA POWER daily climate) for that field. The farmer
+  imports the file; the app checks its checksum, units, field and duplicates,
+  and shows NDVI as context, not as a diagnosis.
 - Answers questions offline in a chat tab ("What should I plant after cotton?",
   "What if there is a drought?").
 - Shows NASA map layers (NDVI, soil moisture, rainfall, surface temperature)
@@ -86,7 +92,12 @@ English interfaces, and calibration against recorded yields.
 5. In the chat, a naive Bayes classifier identifies the question's intent and a
    BM25 retriever finds knowledge-base articles; the reply is assembled from
    advisor results.
-6. Optionally, Qwen2.5-0.5B-Instruct (4-bit GGUF, llama.cpp) runs on the phone
+6. Over SMS (optional server, `server/`): a signed webhook from the SMS
+   provider reaches the server, which runs the same pure-Dart core and replies
+   within 3 SMS segments. Data requests are fetched from MODIS MOD13Q1 (ORNL
+   DAAC web service) and NASA POWER, packed as JSON with a SHA-256 checksum and
+   linked by a random token that expires in 7 days.
+7. Optionally, Qwen2.5-0.5B-Instruct (4-bit GGUF, llama.cpp) runs on the phone
    and adds a two-sentence note in plain language. The exact answer stays
    visible, and the note is discarded if it introduces a number not present in
    the facts, goes off topic or leaves Russian.
@@ -96,11 +107,16 @@ The three core models are pure Dart and add no download; the language model is
 an optional 491 MB download.
 
 ### Validity and limitations
-- 133 automated tests cover scoring, the models, the language-model guards,
+- 143 app tests and 28 server tests cover scoring, the models, the language-model guards,
   the observation interpreter (32-phrase evaluation set written by the team),
   validator, decision rules, lifecycle, NASA response parsing (real responses
-  saved as fixtures), frost dates, salinity, income, calibration and database
-  migrations.
+  saved as fixtures), frost dates, salinity, income, calibration, database
+  migrations, SMS webhook signatures, replays, limits, STOP, the SMS dialogue
+  and package import (duplicates, conflicts, wrong field, tampering).
+- The SMS server was run locally with a simulated provider against the live
+  NASA services: it produced a real MODIS NDVI package for a point near
+  Khujand, which was then imported in the Android emulator. No real SMS number
+  or provider exists yet.
 - The observation rules were written by the team, are intentionally limited to
   "measure / check / consult", and have not been reviewed by an agronomist.
 - The language model has been run in the iOS Simulator only; its Russian is
@@ -112,8 +128,9 @@ an optional 491 MB download.
   not. The engine works in monthly steps; sowing dates are refined to decades.
 - No built-in prices: money income needs the farmer's own numbers. Soil data
   comes from the farmer; salt thresholds are approximate.
-- SMAP, GPM and MODIS appear as map layers; the numeric analysis uses NASA
-  POWER and SRTM.
+- SMAP, GPM and MODIS LST appear as map layers only. MODIS NDVI is used
+  numerically only from an imported package, as context; one 250 m pixel is
+  not the field boundary.
 
 ### Benefits
 - Works where connectivity is poor; field data stays on the phone.
@@ -125,14 +142,17 @@ an optional 491 MB download.
 - Agronomist review of crop parameters for Sughd.
 - Tajik and English interfaces.
 - Use recorded yields from the crop-lifecycle log to calibrate scores.
-- Numeric use of SMAP soil-moisture anomalies and NDVI time series per field.
+- Run the SMS server with a local operator or aggregator and a real number.
+- Numeric use of SMAP soil-moisture anomalies; NDVI over the field polygon
+  rather than one pixel.
 - More region profiles.
 
 ### Tools and technologies
 - Flutter, Dart
 - sqflite, flutter_map, latlong2, geolocator, http, path_provider
 - llamadart / llama.cpp with Qwen2.5-0.5B-Instruct (GGUF)
-- NASA POWER API, NASA GIBS, OpenTopoData (SRTM)
+- NASA POWER API, NASA GIBS, OpenTopoData (SRTM), ORNL DAAC MODIS web service
+- SMS server: Dart, shelf; Twilio or any HTTP SMS gateway
 
 ## NASA Data
 
@@ -145,6 +165,13 @@ an optional 491 MB download.
 - **SRTM** elevation (https://www.earthdata.nasa.gov/data/instruments/srtm) —
   elevation and slope of the field; feeds the erosion-risk term.
 - **MODIS Terra NDVI (16-day)** via NASA GIBS — vegetation layer on the map.
+- **MODIS Terra Vegetation Indices MOD13Q1 v061** (250 m, 16-day,
+  https://lpdaac.usgs.gov/products/mod13q1v061/) through the ORNL DAAC MODIS
+  web service (https://modis.ornl.gov/data/modis_webservice.html) — the field's
+  NDVI series with pixel reliability, delivered as a data package over SMS and
+  shown in the advisor as context.
+- **NASA POWER daily** T2M, T2M_MIN and PRECTOTCORR for a recent period —
+  climate data packages sent through the SMS channel.
 - **SMAP L4 Analyzed Root Zone Soil Moisture** via NASA GIBS — soil-moisture
   layer on the map.
 - **GPM IMERG Precipitation Rate** via NASA GIBS — rainfall layer on the map.

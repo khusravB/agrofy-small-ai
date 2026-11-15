@@ -1,8 +1,8 @@
 
 import 'package:material_ui/material_ui.dart';
 
-import '../models/field.dart';
-import '../models/field_event.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/field_event.dart';
 import '../services/database_service.dart';
 
 class FieldJournalScreen extends StatefulWidget {

@@ -1,4 +1,4 @@
-import 'package:agrofy_small_ai/models/field.dart';
+import 'package:agrofy_core/models/field.dart';
 import 'package:agrofy_small_ai/screens/ai_screen.dart';
 import 'package:agrofy_small_ai/services/database_service.dart';
 import 'package:flutter_test/flutter_test.dart';

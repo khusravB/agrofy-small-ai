@@ -2,23 +2,25 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
-import '../decision/saved_observation.dart';
-import '../models/climate_history.dart';
-import '../models/climate_summary.dart';
-import '../models/crop_economics.dart';
-import '../models/daily_climate.dart';
-import '../models/soil_profile.dart';
-import '../models/terrain_info.dart';
-import '../models/crop_season.dart';
-import '../models/farmer_priorities.dart';
-import '../models/field.dart';
-import '../models/field_event.dart';
+import 'package:agrofy_core/decision/saved_observation.dart';
+import 'package:agrofy_core/models/climate_history.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/crop_economics.dart';
+import 'package:agrofy_core/models/daily_climate.dart';
+import 'package:agrofy_core/models/soil_profile.dart';
+import 'package:agrofy_core/models/terrain_info.dart';
+import 'package:agrofy_core/models/crop_season.dart';
+import 'package:agrofy_core/models/farmer_priorities.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/field_event.dart';
+import 'package:agrofy_core/remote/data_package.dart';
+import 'package:agrofy_core/remote/ndvi_summary.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
 
   /// Текущая версия схемы локальной БД.
-  static const int schemaVersion = 7;
+  static const int schemaVersion = 8;
 
   static Database? _database;
 
@@ -73,6 +75,7 @@ class DatabaseService {
     await _createSmallAiTables(db);
     await _createObservationsTable(db);
     await _createFarmDataTables(db);
+    await _createRemoteDataTables(db);
   }
 
   static Future<void> upgradeSchema(
@@ -127,6 +130,52 @@ class DatabaseService {
     if (oldVersion < 7) {
       await _createFarmDataTables(db);
     }
+
+    if (oldVersion < 8) {
+      await _createRemoteDataTables(db);
+    }
+  }
+
+  /// Схема v8: настройки приложения и данные, импортированные из пакетов,
+  /// полученных по SMS-запросу.
+  static Future<void> _createRemoteDataTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS data_packages (
+        request_id TEXT PRIMARY KEY,
+        field_id INTEGER NOT NULL,
+        imported_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        sources TEXT NOT NULL,
+        status TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        notes TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS remote_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        field_id INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        variable TEXT NOT NULL,
+        date TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT NOT NULL,
+        quality TEXT,
+        request_id TEXT NOT NULL,
+        UNIQUE (field_id, source, variable, date)
+      )
+    ''');
   }
 
   /// Схема v7: почва участка, экономика культур и суточный климат.
@@ -334,6 +383,8 @@ class DatabaseService {
         'observations',
         'soil_profile',
         'climate_daily',
+        'data_packages',
+        'remote_observations',
       ]) {
         await txn.delete(
           table,
@@ -699,6 +750,145 @@ class DatabaseService {
       {'yield_t_ha': yieldTHa},
       where: 'field_id = ? AND year = ?',
       whereArgs: [fieldId, year],
+    );
+  }
+
+  // ----------------------------------------
+  // SETTINGS AND IMPORTED DATA PACKAGES
+  // ----------------------------------------
+
+  Future<String?> getSetting(String key) async {
+    final db = await database;
+    final rows = await db.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first['value'] as String;
+  }
+
+  Future<void> setSetting(String key, String? value) async {
+    final db = await database;
+    if (value == null || value.isEmpty) {
+      await db.delete('app_settings', where: 'key = ?', whereArgs: [key]);
+      return;
+    }
+    await db.insert(
+      'app_settings',
+      {'key': key, 'value': value},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<bool> hasDataPackage(String requestId) async {
+    final db = await database;
+    final rows = await db.query(
+      'data_packages',
+      where: 'request_id = ?',
+      whereArgs: [requestId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// Существующие наблюдения поля: ключ «источник|переменная|дата» → значение.
+  Future<Map<String, double>> remoteObservationIndex(int fieldId) async {
+    final db = await database;
+    final rows = await db.query(
+      'remote_observations',
+      columns: ['source', 'variable', 'date', 'value'],
+      where: 'field_id = ?',
+      whereArgs: [fieldId],
+    );
+    return {
+      for (final row in rows)
+        '${row['source']}|${row['variable']}|${row['date']}':
+            (row['value'] as num).toDouble(),
+    };
+  }
+
+  /// Сохраняет пакет и его наблюдения одной транзакцией. Совпадающие
+  /// наблюдения пропускаются; отличающиеся заменяются только при
+  /// [overwriteConflicts].
+  Future<void> importDataPackage(
+    int fieldId,
+    DataPackage package, {
+    required bool overwriteConflicts,
+    required DateTime importedAt,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert(
+        'data_packages',
+        {
+          'request_id': package.requestId,
+          'field_id': fieldId,
+          'imported_at': importedAt.toIso8601String(),
+          'created_at': package.createdAt.toIso8601String(),
+          'period_start': package.periodStart.toIso8601String(),
+          'period_end': package.periodEnd.toIso8601String(),
+          'sources': package.datasets.map((d) => d.source).join(','),
+          'status': package.quality.statusLabel,
+          'checksum': package.checksum,
+          'schema_version': package.schemaVersion,
+          'notes': [
+            ...package.quality.missingData,
+            ...package.quality.warnings,
+          ].join('\n'),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      for (final dataset in package.datasets) {
+        for (final observation in dataset.observations) {
+          await txn.insert(
+            'remote_observations',
+            {
+              'field_id': fieldId,
+              'source': dataset.source,
+              'variable': observation.variable,
+              'date': observation.date.toIso8601String().substring(0, 10),
+              'value': observation.value,
+              'unit': dataset.units[observation.variable],
+              'quality': observation.quality,
+              'request_id': package.requestId,
+            },
+            conflictAlgorithm: overwriteConflicts
+                ? ConflictAlgorithm.replace
+                : ConflictAlgorithm.ignore,
+          );
+        }
+      }
+    });
+  }
+
+  /// Импортированный ряд NDVI поля.
+  Future<List<NdviPoint>> getNdvi(int fieldId) async {
+    final db = await database;
+    final rows = await db.query(
+      'remote_observations',
+      where: 'field_id = ? AND variable = ?',
+      whereArgs: [fieldId, 'ndvi'],
+      orderBy: 'date ASC',
+    );
+    return [
+      for (final row in rows)
+        NdviPoint(
+          date: DateTime.parse(row['date'] as String),
+          value: (row['value'] as num).toDouble(),
+          quality: row['quality'] as String?,
+        ),
+    ];
+  }
+
+  Future<List<Map<String, Object?>>> getDataPackages(int fieldId) async {
+    final db = await database;
+    return db.query(
+      'data_packages',
+      where: 'field_id = ?',
+      whereArgs: [fieldId],
+      orderBy: 'imported_at DESC',
     );
   }
 }

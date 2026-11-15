@@ -1,9 +1,10 @@
 import 'package:material_ui/material_ui.dart';
 
-import '../ai/farm_assistant.dart';
-import '../ai/llm_grounding.dart';
+import 'package:agrofy_core/ai/farm_assistant.dart';
+import 'package:agrofy_core/ai/llm_grounding.dart';
 import '../ai/local_llm.dart';
-import '../data/assistant_training.dart';
+import 'remote_data_card.dart';
+import 'package:agrofy_core/data/assistant_training.dart';
 
 const _green = Color(0xFF276749);
 
@@ -150,6 +151,19 @@ class _AssistantChatState extends State<AssistantChat>
     _scrollToEnd();
   }
 
+  /// Вопрос по SMS: открывается приложение сообщений, ответ сервера
+  /// придёт в нём же. В чате AGROFY этот ответ не появится.
+  Future<void> _askViaSms(String question) async {
+    final text = question.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Напишите вопрос, затем нажмите SMS.')),
+      );
+      return;
+    }
+    await composeSms(context, text);
+  }
+
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -214,7 +228,12 @@ class _AssistantChatState extends State<AssistantChat>
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Спросить по SMS',
+                onPressed: () => _askViaSms(_controller.text),
+                icon: const Icon(Icons.sms_outlined, color: _green),
+              ),
               IconButton.filled(
                 tooltip: 'Отправить',
                 style: IconButton.styleFrom(backgroundColor: _green),

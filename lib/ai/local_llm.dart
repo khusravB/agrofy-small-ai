@@ -9,7 +9,7 @@ import 'package:llamadart/llamadart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import 'model_file_check.dart';
+import 'package:agrofy_core/ai/model_file_check.dart';
 
 enum LlmStatus {
   unknown,

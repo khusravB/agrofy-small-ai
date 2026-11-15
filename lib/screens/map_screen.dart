@@ -4,8 +4,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../app_events.dart';
-import '../models/climate_summary.dart';
-import '../models/field.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/field.dart';
 import '../services/database_service.dart';
 import 'field_details_screen.dart';
 

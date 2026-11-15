@@ -1,7 +1,7 @@
 
 import 'package:material_ui/material_ui.dart';
 
-import '../models/field.dart';
+import 'package:agrofy_core/models/field.dart';
 import '../services/database_service.dart';
 import '../services/location_service.dart';
 import 'field_details_screen.dart';

@@ -1,16 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:agrofy_small_ai/ai/climate_pattern_model.dart';
-import 'package:agrofy_small_ai/ai/farm_assistant.dart';
-import 'package:agrofy_small_ai/ai/intent_classifier.dart';
-import 'package:agrofy_small_ai/ai/knowledge_retriever.dart';
-import 'package:agrofy_small_ai/data/assistant_training.dart';
-import 'package:agrofy_small_ai/models/climate_history.dart';
-import 'package:agrofy_small_ai/models/field.dart';
-import 'package:agrofy_small_ai/models/terrain_info.dart';
-import 'package:agrofy_small_ai/services/rotation_advisor.dart';
-import 'package:agrofy_small_ai/services/terrain_service.dart';
+import 'package:agrofy_core/ai/climate_pattern_model.dart';
+import 'package:agrofy_core/ai/farm_assistant.dart';
+import 'package:agrofy_core/ai/intent_classifier.dart';
+import 'package:agrofy_core/ai/knowledge_retriever.dart';
+import 'package:agrofy_core/data/assistant_training.dart';
+import 'package:agrofy_core/models/climate_history.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/terrain_info.dart';
+import 'package:agrofy_core/services/rotation_advisor.dart';
+import 'package:agrofy_core/services/terrain_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'sughd_region_test.dart' show khujandClimate, khujandCotton;

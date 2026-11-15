@@ -1,8 +1,8 @@
-import 'package:agrofy_small_ai/models/climate_summary.dart';
-import 'package:agrofy_small_ai/models/crop_season.dart';
-import 'package:agrofy_small_ai/models/farmer_priorities.dart';
-import 'package:agrofy_small_ai/models/field.dart';
-import 'package:agrofy_small_ai/models/terrain_info.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/crop_season.dart';
+import 'package:agrofy_core/models/farmer_priorities.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/terrain_info.dart';
 import 'package:agrofy_small_ai/services/database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -70,14 +70,17 @@ void main() {
     'soil_profile',
     'crop_economics',
     'climate_daily',
+    'app_settings',
+    'data_packages',
+    'remote_observations',
   };
 
   tearDown(() => DatabaseService.useDatabaseForTesting(null));
 
-  test('чистая установка создаёт схему версии 7', () async {
+  test('чистая установка создаёт схему версии 8', () async {
     final db = await openCurrent(inMemoryDatabasePath);
 
-    expect(await db.getVersion(), 7);
+    expect(await db.getVersion(), 8);
     expect(
       await tableNames(db),
       containsAll({'fields', 'field_events', ...advisorTables}),
@@ -113,7 +116,7 @@ void main() {
 
     final upgraded = await openCurrent(path);
 
-    expect(await upgraded.getVersion(), 7);
+    expect(await upgraded.getVersion(), 8);
     expect(await tableNames(upgraded), containsAll(advisorTables));
 
     final fields = await upgraded.query('fields');
@@ -124,7 +127,7 @@ void main() {
 
     // Повторный запуск: миграция не выполняется второй раз, данные на месте.
     final reopened = await openCurrent(path);
-    expect(await reopened.getVersion(), 7);
+    expect(await reopened.getVersion(), 8);
     expect((await reopened.query('fields')).length, 1);
     await reopened.close();
 
@@ -174,7 +177,7 @@ void main() {
     final upgraded = await openCurrent(path);
     DatabaseService.useDatabaseForTesting(upgraded);
 
-    expect(await upgraded.getVersion(), 7);
+    expect(await upgraded.getVersion(), 8);
     expect(await tableNames(upgraded), containsAll(advisorTables));
 
     final seasons = await DatabaseService.instance.getCropSeasons(1);

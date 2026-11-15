@@ -1,0 +1,14 @@
+name: agrofy_core
+description: >-
+  AGROFY Small AI core in pure Dart: crop rotation advisor, decision engine,
+  on-device models and NASA data clients. Shared by the Flutter app and the
+  SMS server.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  crypto: ^3.0.6
+  http: ^1.6.0

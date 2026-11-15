@@ -1,6 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 
-import '../data/knowledge_base.dart';
+import 'package:agrofy_core/data/knowledge_base.dart';
 
 const _green = Color(0xFF276749);
 

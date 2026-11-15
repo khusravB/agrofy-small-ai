@@ -1,0 +1,21 @@
+name: agrofy_sms_server
+description: >-
+  AGROFY Remote Intelligence: SMS AI assistant and satellite data requests.
+  Receives SMS from a provider webhook, answers with the AGROFY Small AI and
+  prepares NASA data packages for import into the app.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  agrofy_core:
+    path: ../packages/agrofy_core
+  crypto: ^3.0.6
+  http: ^1.6.0
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+
+dev_dependencies:
+  test: ^1.26.0

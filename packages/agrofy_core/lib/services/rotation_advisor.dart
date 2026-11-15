@@ -12,6 +12,7 @@ import '../models/farmer_priorities.dart';
 import '../models/field.dart';
 import '../models/site_conditions.dart';
 import '../models/soil_profile.dart';
+import '../remote/ndvi_summary.dart';
 import '../models/terrain_info.dart';
 
 /// Как культура вписывается в климат участка.
@@ -333,6 +334,7 @@ class RotationAdvisor {
     SoilProfile? soil,
     Map<String, CropEconomics> economics = const {},
     DailyClimate? daily,
+    List<NdviPoint> ndvi = const [],
   }) {
     final current = _currentRotation(field, historyCropIds);
     final site = SiteConditions.of(field, terrain: terrain, soil: soil);
@@ -522,15 +524,19 @@ class RotationAdvisor {
     ]..sort((a, b) => b.total.compareTo(a.total));
 
     return AdvisorResult(
-      insights: _insights(
-        field,
-        climate,
-        currentYears,
-        site,
-        patterns,
-        daily: daily,
-        elevation: elevation,
-      ),
+      insights: [
+        ..._insights(
+          field,
+          climate,
+          currentYears,
+          site,
+          patterns,
+          daily: daily,
+          elevation: elevation,
+        ),
+        // Импортированный спутниковый ряд — контекст, а не решение.
+        if (NdviSummary.of(ndvi) case final summary?) summary.describe(),
+      ],
       region: region,
       strategies: [currentStrategy, ...alternatives],
       elevation: elevation,

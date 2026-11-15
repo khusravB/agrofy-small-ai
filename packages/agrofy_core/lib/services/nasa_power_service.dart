@@ -135,4 +135,48 @@ class NasaPowerService {
       fetchedAt: now,
     );
   }
+
+  /// Суточные значения параметров за период: параметр → дата → значение.
+  /// Дни без данных (значение-заглушка NASA) пропускаются.
+  Future<Map<String, Map<DateTime, double>>> fetchDailySeries({
+    required double latitude,
+    required double longitude,
+    required DateTime start,
+    required DateTime end,
+    List<String> parameters = const ['T2M', 'T2M_MIN', 'PRECTOTCORR'],
+  }) async {
+    String day(DateTime date) =>
+        '${date.year}${date.month.toString().padLeft(2, '0')}'
+        '${date.day.toString().padLeft(2, '0')}';
+
+    final uri = Uri.https(_host, _dailyPath, {
+      'parameters': parameters.join(','),
+      'community': 'AG',
+      'latitude': latitude.toStringAsFixed(4),
+      'longitude': longitude.toStringAsFixed(4),
+      'start': day(start),
+      'end': day(end),
+      'format': 'JSON',
+    });
+
+    final response = await _client.get(uri).timeout(const Duration(seconds: 60));
+    if (response.statusCode != 200) {
+      throw Exception('NASA POWER ответил с кодом ${response.statusCode}');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final values = (json['properties'] as Map<String, dynamic>)['parameter']
+        as Map<String, dynamic>;
+    final fill = ((json['header'] as Map?)?['fill_value'] as num?)?.toDouble() ?? -999;
+
+    return {
+      for (final parameter in parameters)
+        parameter: {
+          for (final entry
+              in ((values[parameter] as Map<String, dynamic>?) ?? const {}).entries)
+            if (entry.value is num && (entry.value as num).toDouble() != fill)
+              DateTime.parse(entry.key): (entry.value as num).toDouble(),
+        },
+    };
+  }
 }

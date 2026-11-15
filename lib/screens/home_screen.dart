@@ -2,8 +2,8 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../app_events.dart';
-import '../models/climate_summary.dart';
-import '../models/field.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/field.dart';
 import '../services/database_service.dart';
 
 class HomeScreen extends StatefulWidget {

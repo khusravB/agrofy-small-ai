@@ -1,13 +1,13 @@
-import 'package:agrofy_small_ai/data/crop_catalog.dart';
-import 'package:agrofy_small_ai/decision/crop_lifecycle.dart';
-import 'package:agrofy_small_ai/decision/decision_engine.dart';
-import 'package:agrofy_small_ai/decision/evidence_validator.dart';
-import 'package:agrofy_small_ai/decision/observation.dart';
-import 'package:agrofy_small_ai/decision/observation_interpreter.dart';
-import 'package:agrofy_small_ai/decision/saved_observation.dart';
-import 'package:agrofy_small_ai/models/crop_season.dart';
-import 'package:agrofy_small_ai/models/field.dart';
-import 'package:agrofy_small_ai/models/field_event.dart';
+import 'package:agrofy_core/data/crop_catalog.dart';
+import 'package:agrofy_core/decision/crop_lifecycle.dart';
+import 'package:agrofy_core/decision/decision_engine.dart';
+import 'package:agrofy_core/decision/evidence_validator.dart';
+import 'package:agrofy_core/decision/observation.dart';
+import 'package:agrofy_core/decision/observation_interpreter.dart';
+import 'package:agrofy_core/decision/saved_observation.dart';
+import 'package:agrofy_core/models/crop_season.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/field_event.dart';
 import 'package:agrofy_small_ai/services/database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -76,6 +76,8 @@ const Map<String, Set<String>> evaluationSet = {
   'стоит жара, поливали вчера': {'weather:hot'},
   // Синонимы и разговорные формы.
   'листья скручиваются': {'leaves:wilting'},
+  'в основном нижние листья, почва влажная': {'soil:wet'},
+  'влажность почвы 15%': {'soilMoisture:15'},
   'листья побурели и пожухли': {'leaves:drying'},
   'поле затопило после ливня': {'soil:wet', 'weather:rain'},
   'стоит духота': {'weather:hot'},

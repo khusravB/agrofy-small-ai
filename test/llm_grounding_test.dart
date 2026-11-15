@@ -1,4 +1,4 @@
-import 'package:agrofy_small_ai/ai/llm_grounding.dart';
+import 'package:agrofy_core/ai/llm_grounding.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

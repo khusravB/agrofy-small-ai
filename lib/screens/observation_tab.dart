@@ -2,17 +2,17 @@ import 'package:material_ui/material_ui.dart';
 
 import '../ai/local_llm.dart';
 import '../app_events.dart';
-import '../data/crop_catalog.dart';
-import '../decision/crop_lifecycle.dart';
-import '../decision/decision_engine.dart';
-import '../decision/evidence_validator.dart';
-import '../decision/observation.dart';
-import '../decision/observation_interpreter.dart';
-import '../decision/saved_observation.dart';
-import '../models/climate_summary.dart';
-import '../models/crop_season.dart';
-import '../models/field.dart';
-import '../models/field_event.dart';
+import 'package:agrofy_core/data/crop_catalog.dart';
+import 'package:agrofy_core/decision/crop_lifecycle.dart';
+import 'package:agrofy_core/decision/decision_engine.dart';
+import 'package:agrofy_core/decision/evidence_validator.dart';
+import 'package:agrofy_core/decision/observation.dart';
+import 'package:agrofy_core/decision/observation_interpreter.dart';
+import 'package:agrofy_core/decision/saved_observation.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/crop_season.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/field_event.dart';
 import '../services/database_service.dart';
 
 const _green = Color(0xFF276749);

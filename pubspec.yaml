@@ -30,6 +30,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  agrofy_core:
+    path: packages/agrofy_core
   material_ui: ^1.1.0
 
   # The following adds the Cupertino Icons font to your application.
@@ -47,6 +49,8 @@ dependencies:
   file_picker: ^13.3.3
   share_plus: ^13.3.1
   crypto: ^3.0.8
+  url_launcher: ^6.3.3
+  archive: ^4.7.1
 
 dev_dependencies:
   flutter_test:

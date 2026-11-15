@@ -1,0 +1,438 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:agrofy_core/ai/farm_assistant.dart';
+import 'package:agrofy_core/data/crop_catalog.dart';
+import 'package:agrofy_core/decision/decision_engine.dart';
+import 'package:agrofy_core/decision/evidence_validator.dart';
+import 'package:agrofy_core/decision/observation.dart';
+import 'package:agrofy_core/decision/observation_interpreter.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/remote/sms_command.dart';
+import 'package:agrofy_core/remote/sms_text.dart';
+import 'package:agrofy_core/services/nasa_power_service.dart';
+import 'package:agrofy_core/services/rotation_advisor.dart';
+import 'package:crypto/crypto.dart';
+
+import 'config.dart';
+import 'data_service.dart';
+import 'providers.dart';
+import 'store.dart';
+
+/// Результат обработки входящего SMS: что ответить сразу и что доделать
+/// в фоне (подготовка пакета данных занимает до минуты).
+class SmsOutcome {
+  final List<String> replies;
+  final Future<void> Function()? background;
+
+  const SmsOutcome(this.replies, [this.background]);
+
+  static const SmsOutcome silent = SmsOutcome([]);
+}
+
+/// Command Parser + Conversation Service + AI Orchestrator.
+///
+/// Вопрос обрабатывают те же модули, что и в приложении: Small AI
+/// понимает текст, Evidence Validator и Decision Engine дают проверяемый
+/// ответ. Генеративная модель на сервере не используется.
+class SmsService {
+  static const int maxInboundLength = 480;
+
+  static const String helpText =
+      'AGROFY: задайте вопрос текстом. Поле: REG F1 40.28,69.62 ХЛОПОК. '
+      'Выбрать: FIELD F1. Данные: FIELD F1 NDVI 90D (или CLIMATE 1Y). '
+      'NEW — сброс, STOP — отписка.';
+
+  final ServerConfig config;
+  final Store store;
+  final DataPackageService data;
+  final SmsProvider provider;
+  final NasaPowerService power;
+  final DateTime Function() clock;
+
+  final FarmAssistant _assistant = FarmAssistant();
+  static const _interpreter = ObservationInterpreter();
+  static const _validator = EvidenceValidator();
+  static const _engine = DecisionEngine();
+  static const _advisor = RotationAdvisor();
+
+  SmsService({
+    required this.config,
+    required this.store,
+    required this.data,
+    required this.provider,
+    NasaPowerService? power,
+    DateTime Function()? clock,
+  })  : power = power ?? NasaPowerService(),
+        clock = clock ?? DateTime.now;
+
+  /// Обезличенный номер для журнала.
+  String phoneHash(String phone) => sha256
+      .convert(utf8.encode('${config.auditSalt}:$phone'))
+      .toString()
+      .substring(0, 16);
+
+  String _fit(List<String> parts) =>
+      SmsText.fit(parts, maxSegments: config.maxReplySegments);
+
+  Future<void> _audit(String phone, String type, List<String> replies) async {
+    final line = jsonEncode({
+      'at': clock().toUtc().toIso8601String(),
+      'phone': phoneHash(phone),
+      'type': type,
+      'segments_out': replies.fold<int>(0, (s, r) => s + SmsText.segments(r)),
+    });
+    await File('${config.dataDir}/audit.jsonl')
+        .writeAsString('$line\n', mode: FileMode.append);
+  }
+
+  Future<SmsOutcome> handle(InboundSms sms) async {
+    final now = clock();
+    await store.purge(now, config.contextTtl);
+
+    // Повтор того же сообщения (провайдер прислал вебхук ещё раз).
+    if (store.seenMessages.containsKey(sms.messageId)) {
+      return SmsOutcome.silent;
+    }
+    store.seenMessages[sms.messageId] = now;
+
+    final conversation = store.conversation(sms.from, now);
+    final command = SmsCommand.parse(sms.text);
+
+    // Отписка соблюдается всегда; после неё отвечаем только на START.
+    if (command.type == SmsCommandType.stop) {
+      conversation
+        ..optedOut = true
+        ..facts = null
+        ..updatedAt = now;
+      await store.save();
+      const reply = 'AGROFY: вы отписаны, ответов больше не будет. '
+          'START — снова включить.';
+      await _audit(sms.from, 'stop', [reply]);
+      return const SmsOutcome([reply]);
+    }
+    if (conversation.optedOut && command.type != SmsCommandType.start) {
+      await store.save();
+      return SmsOutcome.silent;
+    }
+
+    // Лимиты: при превышении отвечаем один раз, дальше молчим.
+    final lastHour = conversation.inbound
+        .where((d) => now.difference(d) < const Duration(hours: 1))
+        .length;
+    final lastDay = conversation.inbound.length;
+    conversation.inbound.add(now);
+    conversation.updatedAt = now;
+    if (lastHour >= config.maxPerHour || lastDay >= config.maxPerDay) {
+      await store.save();
+      final firstOver = lastHour == config.maxPerHour || lastDay == config.maxPerDay;
+      if (!firstOver) {
+        return SmsOutcome.silent;
+      }
+      const reply = 'AGROFY: лимит сообщений исчерпан, попробуйте позже.';
+      await _audit(sms.from, 'limit', [reply]);
+      return const SmsOutcome([reply]);
+    }
+
+    if (sms.text.length > maxInboundLength) {
+      await store.save();
+      const reply = 'AGROFY: сообщение слишком длинное. Опишите вопрос короче.';
+      return const SmsOutcome([reply]);
+    }
+
+    final outcome = await _dispatch(sms, command, conversation, now);
+    await store.save();
+    await _audit(sms.from, command.type.name, outcome.replies);
+    return outcome;
+  }
+
+  Future<SmsOutcome> _dispatch(
+    InboundSms sms,
+    SmsCommand command,
+    Conversation conversation,
+    DateTime now,
+  ) async {
+    if (!command.isValid) {
+      return SmsOutcome([_fit(['AGROFY: ${command.error}'])]);
+    }
+
+    switch (command.type) {
+      case SmsCommandType.help:
+        return SmsOutcome([_fit([helpText])]);
+
+      case SmsCommandType.start:
+        conversation.optedOut = false;
+        return SmsOutcome([_fit(['AGROFY: ответы снова включены.', helpText])]);
+
+      case SmsCommandType.reset:
+        conversation.facts = null;
+        return const SmsOutcome(['AGROFY: диалог начат заново.']);
+
+      case SmsCommandType.register:
+        final fields = store.fields.putIfAbsent(sms.from, () => {});
+        final record = FieldRecord(
+          fieldId: command.fieldId!,
+          latitude: command.point!.latitude,
+          longitude: command.point!.longitude,
+          crop: command.text,
+          registeredAt: now,
+        );
+        fields[command.fieldId!] = record;
+        conversation.activeField = command.fieldId;
+        return SmsOutcome(
+          [
+            _fit([
+              'AGROFY: поле ${command.fieldId} сохранено '
+                  '(${command.point!.format()}'
+                  '${command.text == null ? '' : ', ${command.text!.toLowerCase()}'}).',
+              'Вопросы теперь учитывают климат NASA этого поля.',
+            ]),
+          ],
+          () => _climateFor(sms.from, record).then((_) {}),
+        );
+
+      case SmsCommandType.selectField:
+        final record = store.fields[sms.from]?[command.fieldId];
+        if (record == null) {
+          return SmsOutcome([
+            _fit([
+              'AGROFY: поле ${command.fieldId} не найдено для этого номера.',
+              'Зарегистрируйте: REG ${command.fieldId} 40.28,69.62 ХЛОПОК',
+            ]),
+          ]);
+        }
+        conversation
+          ..activeField = command.fieldId
+          ..facts = null;
+        return SmsOutcome(['AGROFY: выбрано поле ${command.fieldId}.']);
+
+      case SmsCommandType.dataRequest:
+        return _dataRequest(sms, command, conversation, now);
+
+      case SmsCommandType.question:
+        return SmsOutcome([await _answer(sms, command.text ?? '', conversation, now)]);
+
+      case SmsCommandType.stop:
+        return SmsOutcome.silent;
+    }
+  }
+
+  Future<SmsOutcome> _dataRequest(
+    InboundSms sms,
+    SmsCommand command,
+    Conversation conversation,
+    DateTime now,
+  ) async {
+    double latitude;
+    double longitude;
+    final fieldId = command.fieldId;
+
+    if (fieldId != null) {
+      final record = store.fields[sms.from]?[fieldId];
+      if (record == null) {
+        return SmsOutcome([
+          _fit([
+            'AGROFY: нет доступа к полю $fieldId с этого номера.',
+            'Зарегистрируйте его: REG $fieldId широта,долгота',
+          ]),
+        ]);
+      }
+      latitude = record.latitude;
+      longitude = record.longitude;
+    } else {
+      latitude = command.point!.latitude;
+      longitude = command.point!.longitude;
+    }
+
+    if (conversation.dataRequests.length >= config.maxDataRequestsPerDay) {
+      return const SmsOutcome(['AGROFY: лимит запросов данных на сегодня исчерпан.']);
+    }
+    conversation.dataRequests.add(now);
+
+    final target = fieldId ?? command.point!.format();
+    final kind = command.kind!;
+    final days = command.days!;
+    final owner = phoneHash(sms.from);
+
+    Future<void> work() async {
+      String reply;
+      try {
+        final built = await data.build(
+          ownerHash: owner,
+          kind: kind,
+          days: days,
+          latitude: latitude,
+          longitude: longitude,
+          fieldId: fieldId,
+        );
+        reply = _packageMessage(built, target, kind);
+      } on Object {
+        reply = 'AGROFY: не удалось подготовить данные для $target. '
+            'Повторите позже.';
+      }
+      await provider.send(sms.from, reply);
+      await _audit(sms.from, 'data_ready', [reply]);
+    }
+
+    return SmsOutcome(
+      [
+        _fit([
+          'AGROFY: запрос ${kind.keyword} для $target принят.',
+          'Ссылку на файл пришлём SMS через 1–2 минуты.',
+        ]),
+      ],
+      work,
+    );
+  }
+
+  String _packageMessage(BuiltPackage built, String target, DataRequestKind kind) {
+    final package = built.package;
+    String day(DateTime d) =>
+        '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+
+    final url = built.url(config.publicUrl);
+    if (url == null) {
+      final reason = package.quality.missingData.isEmpty
+          ? ''
+          : ' ${package.quality.missingData.first}';
+      return SmsText.truncate(
+        'AGROFY: данных ${kind.keyword} для $target за период нет (UNAVAILABLE).$reason',
+        config.maxReplySegments,
+      );
+    }
+
+    // Ссылка не обрезается: она идёт отдельной обязательной частью.
+    final expires = built.record!.expiresAt;
+    final head = 'AGROFY: данные ${kind.keyword} $target '
+        '${day(package.periodStart)}–${day(package.periodEnd)}.${package.periodEnd.year}, '
+        '${package.quality.statusLabel}. До ${day(expires)}: $url';
+    return _fit([head, 'Импорт: AGROFY → AI → Данные.']);
+  }
+
+  Future<ClimateSummary?> _climateFor(String phone, FieldRecord record) async {
+    final cached = record.climate;
+    if (cached != null) {
+      try {
+        return ClimateSummary.decode(cached);
+      } on Object {
+        // повреждённый кэш — загрузим заново
+      }
+    }
+    try {
+      final climate = await power
+          .fetchClimatology(latitude: record.latitude, longitude: record.longitude)
+          .timeout(const Duration(seconds: 10));
+      store.fields[phone]?[record.fieldId] = record.withClimate(climate.encode());
+      await store.save();
+      return climate;
+    } on Object {
+      return null;
+    }
+  }
+
+  Future<String> _answer(
+    InboundSms sms,
+    String text,
+    Conversation conversation,
+    DateTime now,
+  ) async {
+    final record = conversation.activeField == null
+        ? null
+        : store.fields[sms.from]?[conversation.activeField];
+    final climate = record == null ? null : await _climateFor(sms.from, record);
+
+    final field = Field(
+      id: 1,
+      name: record?.fieldId ?? 'SMS',
+      location: '',
+      area: 1,
+      crop: _cropName(record?.crop),
+      latitude: record?.latitude,
+      longitude: record?.longitude,
+    );
+    final fieldCrop = CropCatalog.fromFieldCrop(field.crop)?.id;
+
+    // 1. Наблюдение («листья желтеют, почва сухая») — через проверку данных
+    //    и движок решений, с учётом фактов из прошлых сообщений диалога.
+    final observation = _interpreter.interpret(text, date: now, fieldCropId: fieldCrop);
+    if (observation.facts.isNotEmpty) {
+      final previous = conversation.facts == null
+          ? const <ObservedFact>[]
+          : FieldObservation.decodeFacts(conversation.facts!);
+      final merged = FieldObservation(
+        text: text,
+        date: now,
+        cropId: observation.cropId,
+        cropSource: observation.cropSource,
+        facts: [
+          for (final fact in previous)
+            if (observation.of(fact.attribute).isEmpty) fact,
+          ...observation.facts,
+        ],
+      );
+      conversation.facts = merged.encodeFacts();
+
+      final report = _validator.validate(
+        merged,
+        EvidenceContext(field: field, climate: climate),
+      );
+      final recommendation = _engine.decide(report);
+      final next = recommendation.plan.isEmpty
+          ? null
+          : recommendation.plan.first.title;
+      // Пометка «не диагноз» обязательна, поэтому идёт сразу за действием.
+      return _fit([
+        '${recommendation.action} (подсказка, не диагноз).',
+        _firstSentence(recommendation.reason),
+        if (next != null && next.toLowerCase() != recommendation.action.toLowerCase())
+          'Шаг: ${_lowerFirst(next)}.',
+      ]);
+    }
+
+    // 2. Вопрос — классификатор намерений и расчёты советника.
+    final result = record == null
+        ? null
+        : _advisor.advise(field: field, historyCropIds: const [], climate: climate);
+    final answer = _assistant.answer(
+      text,
+      AssistantContext(
+        field: record == null ? null : field,
+        result: result,
+        climate: climate,
+      ),
+    );
+
+    if (record == null && answer.source == 'Нет данных участка') {
+      return _fit([
+        'AGROFY: для ответа нужно поле.',
+        'Отправьте: REG F1 широта,долгота КУЛЬТУРА, например REG F1 40.28,69.62 ХЛОПОК',
+      ]);
+    }
+
+    final lines = answer.text
+        .split('\n')
+        .map((l) => l.replaceFirst(RegExp(r'^[•\-\s]+'), '').trim())
+        .where((l) => l.isNotEmpty)
+        .map((l) => RegExp(r'[.!?:;…]$').hasMatch(l) ? l : '$l.')
+        .toList();
+    return _fit(lines);
+  }
+
+  static String _cropName(String? text) {
+    if (text == null || text.isEmpty) {
+      return 'Другое';
+    }
+    final lower = text.toLowerCase();
+    return '${lower[0].toUpperCase()}${lower.substring(1)}';
+  }
+
+  static String _firstSentence(String text) {
+    final end = text.indexOf(RegExp(r'[.!?](\s|$)'));
+    return end < 0 ? text : text.substring(0, end + 1);
+  }
+
+  static String _lowerFirst(String text) =>
+      text.isEmpty ? text : '${text[0].toLowerCase()}${text.substring(1)}';
+}

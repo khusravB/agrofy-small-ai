@@ -30,7 +30,7 @@ not a neural network.
 The language model is never the source of facts. The exact answer is always
 shown; the model only adds a short note, and the note is dropped if it contains
 a number that is not in the facts, drifts off topic or is not in Russian
-(`lib/ai/llm_grounding.dart`). A 0.5B model writes imperfect Russian, so treat
+(`packages/agrofy_core/lib/ai/llm_grounding.dart`). A 0.5B model writes imperfect Russian, so treat
 the note as a convenience, not as advice. Without the model the app works
 exactly the same, minus the note.
 
@@ -42,12 +42,12 @@ rules decide, and the result is explained as a plan.
 
 | Layer | Code | Responsibility |
 |---|---|---|
-| Interpreter | `lib/decision/observation_interpreter.dart` | Free text → structured facts, each with a source and a status (observed / inferred / unknown) |
-| Evidence validator | `lib/decision/evidence_validator.dart` | Missing data, contradictions between the farmer, the journal, measurements and NASA climate; never picks a side |
-| Decision engine | `lib/decision/decision_engine.dart` | Reproducible rules → a decision code such as `verifySoilMoisture`; asks for a measurement rather than prescribing when evidence is thin |
+| Interpreter | `packages/agrofy_core/lib/decision/observation_interpreter.dart` | Free text → structured facts, each with a source and a status (observed / inferred / unknown) |
+| Evidence validator | `packages/agrofy_core/lib/decision/evidence_validator.dart` | Missing data, contradictions between the farmer, the journal, measurements and NASA climate; never picks a side |
+| Decision engine | `packages/agrofy_core/lib/decision/decision_engine.dart` | Reproducible rules → a decision code such as `verifySoilMoisture`; asks for a measurement rather than prescribing when evidence is thin |
 | Recommendation and plan | same file | Action, reason, evidence, missing information, three alternatives, expected outcome, status, action steps |
-| Crop lifecycle | `lib/decision/crop_lifecycle.dart` | Eight stages, forward-only transitions, each logged to the field journal |
-| Field memory and outcomes | `lib/decision/saved_observation.dart` | Stored observations; a later observation is compared with the earlier recommendation without claiming causality |
+| Crop lifecycle | `packages/agrofy_core/lib/decision/crop_lifecycle.dart` | Eight stages, forward-only transitions, each logged to the field journal |
+| Field memory and outcomes | `packages/agrofy_core/lib/decision/saved_observation.dart` | Stored observations; a later observation is compared with the earlier recommendation without claiming causality |
 
 The interpreter is a small lexicon model that always works offline. The
 optional language model may add features only inside a strict JSON schema, only
@@ -102,12 +102,43 @@ have not been reviewed by an agronomist; they deliberately stop at "measure",
 - **Crop lifecycle** — eight stages with controlled transitions, stored locally.
 - **Field memory** — timeline of observations, irrigations and stage changes.
 
+## SMS channel and satellite data packages
+
+For places with mobile signal but no data connection. Both features need the
+AGROFY SMS server (`server/`, see [server/README.md](server/README.md)); the app
+itself never reads SMS.
+
+- **Ask by SMS.** In the chat tab, «Спросить по SMS» opens the phone's SMS app
+  with the AGROFY number and the question. The farmer presses Send; the server
+  answers by SMS with the same interpreter, validator and decision engine as the
+  app, using the field's NASA climate. Replies fit in 3 SMS segments and keep the
+  "подсказка, не диагноз" caveat. Follow-ups use the facts of the conversation
+  (24 hours): "листья желтеют" → "в основном нижние, почва влажная".
+- **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые
+  данные» prepares `REG F5 lat,lon CROP`, `FIELD F5 NDVI 3M` or
+  `FIELD F5 CLIMATE 1Y`. The server builds a JSON package from MODIS NDVI
+  (MOD13Q1, ORNL DAAC) or NASA POWER daily data and sends an SMS with a link
+  that expires in 7 days. The farmer downloads the file when there is any
+  connection (or gets it from a neighbour) and imports it with «Импортировать
+  пакет».
+- **Import is checked**: schema version, units, SHA-256 checksum, field id and
+  distance from the field, duplicates, and values that differ from stored ones
+  (replaced only if the farmer ticks the box). Imported NDVI appears as context
+  in the advisor ("NDVI below 0.2 in Aug, Oct…"); it never changes the
+  recommendation by itself.
+
+Security on the server: signed webhooks (Twilio HMAC-SHA1 or HMAC-SHA256 with a
+timestamp), replay protection, per-phone limits, HELP/STOP, owner-only access to
+field data, hashed phone numbers in the audit log, random expiring links.
+
 ## Data
 
 | Source | Used for | Access |
 |---|---|---|
 | [NASA POWER](https://power.larc.nasa.gov/) climatology and monthly history | Temperature, rainfall, frost days, root-zone soil wetness; water balance, sowing windows, year types, trends | Downloaded once per field, cached in SQLite |
 | NASA POWER daily (T2M, T2M_MIN, 1991–last year) | Frost dates with probability, sowing to the decade | Downloaded once per field, cached |
+| NASA POWER daily (T2M, T2M_MIN, PRECTOTCORR), recent period | Climate packages sent by the SMS server | Server; imported as a file |
+| [MODIS Terra MOD13Q1](https://lpdaac.usgs.gov/products/mod13q1v061/) NDVI, 250 m, 16-day, via the [ORNL DAAC MODIS web service](https://modis.ornl.gov/data/modis_webservice.html) | Field NDVI series with reliability flags → advisor context | Server; imported as a file |
 | [NASA SRTM](https://www.earthdata.nasa.gov/data/instruments/srtm) via [OpenTopoData](https://www.opentopodata.org/) | Elevation and slope → erosion risk | Downloaded once per field, cached |
 | [NASA GIBS](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api) | Map layers: MODIS NDVI, SMAP L4 root-zone soil moisture, GPM IMERG precipitation, MODIS LST | Online map tiles |
 | [OpenStreetMap](https://www.openstreetmap.org/copyright) | Base map | Online map tiles |
@@ -116,7 +147,7 @@ have not been reviewed by an agronomist; they deliberately stop at "measure",
 | UNEP aridity index classes | Class of the warm-season P/ET0 ratio | Method |
 | [Qwen2.5-0.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) (Apache 2.0) | Optional on-device language model | Downloaded once in the chat tab |
 
-Crop parameters in `lib/data/crop_catalog.dart` are generalized reference values
+Crop parameters in `packages/agrofy_core/lib/data/crop_catalog.dart` are generalized reference values
 chosen by the developers; they have not been reviewed by a local agronomist.
 
 ## Limitations
@@ -134,8 +165,12 @@ chosen by the developers; they have not been reviewed by a local agronomist.
 - Tajik words and phrases were added by the developers and need a native
   speaker's review.
 - Only one region profile (Sughd) exists; elsewhere a general crop list is used.
-- SMAP, GPM and MODIS are shown as map layers; the numeric analysis uses
-  NASA POWER and SRTM.
+- SMAP, GPM and MODIS LST are map layers only. MODIS NDVI is used numerically
+  only when a package is imported, and only as context: a 250 m pixel, not the
+  field boundary.
+- The SMS server has run only locally with a simulated provider. There is no
+  AGROFY number or SMS provider account yet; hosting, the number and SMS costs
+  are up to whoever runs the service.
 - The UI is in Russian only.
 - The optional language model needs iOS 16.4+, about 500 MB of storage and
   enough RAM; it has been run in the iOS Simulator only, not on a phone.
@@ -173,18 +208,28 @@ flutter analyze
 flutter test
 ```
 
-133 tests cover the scoring engine (including 3–5-year rotations and the
+143 app tests cover the scoring engine (including 3–5-year rotations and the
 return-interval rule), the models, NASA response parsers (real monthly and daily
 responses saved as fixtures), elevation correction, frost dates, salinity,
 money income, yield calibration, model-file checks, database migrations up to
-schema v7, and the observation interpreter on a 32-phrase evaluation set
-(typos, synonyms, Tajik) written by the developers.
+schema v8, and the observation interpreter on a 32-phrase evaluation set
+(typos, synonyms, Tajik) written by the developers, SMS links and package
+import (duplicates, conflicts, wrong field, ZIP, tampering). 28 server tests
+(`cd server && dart test`) cover webhook signatures, replays, limits, STOP,
+commands, the dialogue, package building and expiring links.
 
 ## Structure
 
-- `lib/ai/` — year-type model, trend statistics, intent classifier, retriever, assistant
-- `lib/decision/` — observation interpreter, evidence validator, decision engine, lifecycle, field memory
-- `lib/services/rotation_advisor.dart` — rotation scoring and explanations
-- `lib/services/` — NASA POWER client, terrain client, local database
-- `lib/data/` — crop catalogue, region profile, knowledge base, training examples
+- `packages/agrofy_core/` — pure-Dart core shared by the app and the server
+  - `ai/` — year-type model, trend statistics, intent classifier, retriever,
+    assistant, language-model guards
+  - `decision/` — observation interpreter, evidence validator, decision engine,
+    lifecycle
+  - `services/` — rotation advisor, NASA POWER, MODIS and terrain clients
+  - `data/` — crop catalogue, region profile, knowledge base, training examples
+  - `remote/` — SMS commands and lengths, data-package format, NDVI summary
+- `server/` — SMS server: webhooks, dialogue, data packages
+  ([server/README.md](server/README.md))
+- `lib/ai/local_llm.dart` — on-device language model (llama.cpp)
+- `lib/services/` — local database, package import, SMS launcher, location
 - `lib/screens/` — UI

@@ -1,27 +1,29 @@
 import 'package:material_ui/material_ui.dart';
 
-import '../ai/climate_pattern_model.dart';
-import '../ai/farm_assistant.dart';
+import 'package:agrofy_core/ai/climate_pattern_model.dart';
+import 'package:agrofy_core/ai/farm_assistant.dart';
 import '../app_events.dart';
-import '../data/crop_catalog.dart';
-import '../models/climate_history.dart';
-import '../models/climate_summary.dart';
-import '../models/crop_economics.dart';
-import '../models/crop_profile.dart';
-import '../models/crop_season.dart';
-import '../models/daily_climate.dart';
-import '../models/farmer_priorities.dart';
-import '../models/field.dart';
-import '../models/site_conditions.dart';
-import '../models/soil_profile.dart';
-import '../models/terrain_info.dart';
+import 'package:agrofy_core/data/crop_catalog.dart';
+import 'package:agrofy_core/models/climate_history.dart';
+import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:agrofy_core/models/crop_economics.dart';
+import 'package:agrofy_core/models/crop_profile.dart';
+import 'package:agrofy_core/models/crop_season.dart';
+import 'package:agrofy_core/models/daily_climate.dart';
+import 'package:agrofy_core/models/farmer_priorities.dart';
+import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/models/site_conditions.dart';
+import 'package:agrofy_core/models/soil_profile.dart';
+import 'package:agrofy_core/models/terrain_info.dart';
 import '../services/database_service.dart';
-import '../services/nasa_power_service.dart';
-import '../services/rotation_advisor.dart';
-import '../services/terrain_service.dart';
-import '../services/yield_calibration.dart';
+import 'package:agrofy_core/services/nasa_power_service.dart';
+import 'package:agrofy_core/services/rotation_advisor.dart';
+import 'package:agrofy_core/services/terrain_service.dart';
+import 'package:agrofy_core/services/yield_calibration.dart';
 import 'advisor_cards.dart';
+import 'package:agrofy_core/remote/ndvi_summary.dart';
 import 'assistant_chat.dart';
+import 'remote_data_card.dart';
 import 'observation_tab.dart';
 
 const _green = Color(0xFF276749);
@@ -52,6 +54,10 @@ class _AIScreenState extends State<AIScreen> {
   TerrainInfo? _terrain;
   DailyClimate? _daily;
   SoilProfile? _soil;
+
+  /// Импортированный по SMS-запросу ряд NDVI и число пакетов.
+  List<NdviPoint> _ndvi = const [];
+  int _packageCount = 0;
 
   /// Экономика культур, введённая фермером (общая для хозяйства).
   Map<String, CropEconomics> _economics = {};
@@ -147,6 +153,8 @@ class _AIScreenState extends State<AIScreen> {
     final priorities = await _db.getPriorities(id);
     final daily = await _db.getDailyClimate(id);
     final soil = await _db.getSoilProfile(id);
+    final ndvi = await _db.getNdvi(id);
+    final packages = await _db.getDataPackages(id);
 
     if (!mounted) {
       return;
@@ -161,6 +169,8 @@ class _AIScreenState extends State<AIScreen> {
       _terrain = terrain;
       _daily = daily;
       _soil = soil;
+      _ndvi = ndvi;
+      _packageCount = packages.length;
       _climateError = null;
       _history = {for (final season in seasons) season.year: season};
       _priorities = priorities;
@@ -390,6 +400,8 @@ class _AIScreenState extends State<AIScreen> {
       _daily?.fetchedAt,
       _terrain?.fetchedAt,
       _soil?.updatedAt,
+      _ndvi.length,
+      _ndvi.isEmpty ? null : _ndvi.last.date,
     ].join('|');
 
     final cached = _result;
@@ -412,6 +424,7 @@ class _AIScreenState extends State<AIScreen> {
       soil: _soil,
       economics: economics,
       daily: _daily?.withTempDelta(_tempDelta),
+      ndvi: _ndvi,
     );
 
     _resultKey = key;
@@ -564,6 +577,13 @@ class _AIScreenState extends State<AIScreen> {
         const SizedBox(height: 12),
         _buildClimateCard(field, result),
         SoilCard(soil: _soil, onSave: _saveSoil),
+        RemoteDataCard(
+          key: ValueKey('remote-${field.id}'),
+          field: field,
+          ndvi: _ndvi,
+          packageCount: _packageCount,
+          onImported: () => _selectField(field),
+        ),
         _buildHistoryCard(field),
         CalibrationCard(calibration: _calibration(field, result)),
         _buildPrioritiesCard(),

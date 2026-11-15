@@ -1,10 +1,10 @@
 import 'package:material_ui/material_ui.dart';
 
-import '../models/crop_economics.dart';
-import '../models/crop_profile.dart';
-import '../models/soil_profile.dart';
-import '../services/rotation_advisor.dart';
-import '../services/yield_calibration.dart';
+import 'package:agrofy_core/models/crop_economics.dart';
+import 'package:agrofy_core/models/crop_profile.dart';
+import 'package:agrofy_core/models/soil_profile.dart';
+import 'package:agrofy_core/services/rotation_advisor.dart';
+import 'package:agrofy_core/services/yield_calibration.dart';
 
 const _green = Color(0xFF276749);
 
