@@ -78,7 +78,13 @@ class SmsText {
         }
       }
     }
-    return text;
+    // Заголовок списка («Тренды за 35 лет:»), за которым ничего не
+    // поместилось, не оставляем.
+    final kept = sentences(text);
+    while (kept.length > 1 && kept.last.endsWith(':')) {
+      kept.removeLast();
+    }
+    return kept.join(' ');
   }
 
   /// Обрезает текст по границе слова, чтобы он поместился в [maxSegments].

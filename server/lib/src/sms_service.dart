@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:agrofy_core/ai/farm_assistant.dart';
+import 'package:agrofy_core/ai/climate_pattern_model.dart';
 import 'package:agrofy_core/data/crop_catalog.dart';
+import 'package:agrofy_core/models/climate_history.dart';
 import 'package:agrofy_core/decision/decision_engine.dart';
 import 'package:agrofy_core/decision/evidence_validator.dart';
 import 'package:agrofy_core/decision/observation.dart';
@@ -198,7 +200,10 @@ class SmsService {
               'Вопросы теперь учитывают климат NASA этого поля.',
             ]),
           ],
-          () => _climateFor(sms.from, record).then((_) {}),
+          () async {
+            await _climateFor(sms.from, record);
+            await _historyFor(sms.from, fields[command.fieldId!]!);
+          },
         );
 
       case SmsCommandType.selectField:
@@ -220,7 +225,18 @@ class SmsService {
         return _dataRequest(sms, command, conversation, now);
 
       case SmsCommandType.question:
-        return SmsOutcome([await _answer(sms, command.text ?? '', conversation, now)]);
+        final reply = await _answer(sms, command.text ?? '', conversation, now);
+        final active = conversation.activeField == null
+            ? null
+            : store.fields[sms.from]?[conversation.activeField];
+        // Поле зарегистрировано до появления истории или загрузка не
+        // удалась — догружаем в фоне, следующий ответ её учтёт.
+        return SmsOutcome(
+          [reply],
+          active != null && active.history == null
+              ? () => _historyFor(sms.from, active).then((_) {})
+              : null,
+        );
 
       case SmsCommandType.stop:
         return SmsOutcome.silent;
@@ -340,6 +356,38 @@ class SmsService {
     }
   }
 
+  /// История по годам: из кэша или из NASA POWER (только в фоне — запрос
+  /// долгий, вебхук ждать не может).
+  Future<ClimateHistory?> _historyFor(String phone, FieldRecord record) async {
+    final cached = _cachedHistory(record);
+    if (cached != null) {
+      return cached;
+    }
+    try {
+      final history = await power
+          .fetchHistory(latitude: record.latitude, longitude: record.longitude)
+          .timeout(const Duration(seconds: 60));
+      final current = store.fields[phone]?[record.fieldId] ?? record;
+      store.fields[phone]?[record.fieldId] = current.copyWith(history: history.encode());
+      await store.save();
+      return history;
+    } on Object {
+      return null;
+    }
+  }
+
+  static ClimateHistory? _cachedHistory(FieldRecord? record) {
+    final cached = record?.history;
+    if (cached == null) {
+      return null;
+    }
+    try {
+      return ClimateHistory.decode(cached);
+    } on Object {
+      return null;
+    }
+  }
+
   Future<String> _answer(
     InboundSms sms,
     String text,
@@ -350,6 +398,10 @@ class SmsService {
         ? null
         : store.fields[sms.from]?[conversation.activeField];
     final climate = record == null ? null : await _climateFor(sms.from, record);
+    final history = _cachedHistory(record);
+    final patterns = history == null || history.years.length < 6
+        ? null
+        : const ClimatePatternModel().train(history);
 
     final field = Field(
       id: 1,
@@ -406,6 +458,7 @@ class SmsService {
             field: field,
             historyCropIds: fieldCrop == null ? const [] : [fieldCrop],
             climate: climate,
+            patterns: patterns,
           );
     final answer = _assistant.answer(
       text,
@@ -413,8 +466,17 @@ class SmsService {
         field: record == null ? null : field,
         result: result,
         climate: climate,
+        patterns: patterns,
       ),
     );
+
+    if (record != null &&
+        (answer.source == 'Нет истории погоды' || answer.source == 'Нет климатических данных')) {
+      return _fit([
+        'AGROFY: данные NASA для поля ${record.fieldId} ещё загружаются.',
+        'Повторите вопрос через 1–2 минуты.',
+      ]);
+    }
 
     if (record == null && answer.source == 'Нет данных участка') {
       return _fit([
@@ -437,6 +499,9 @@ class SmsService {
         .map((l) => l.replaceFirst(RegExp(r'^[•\-\s]+'), '').trim())
         .where((l) => l.isNotEmpty)
         .map((l) => RegExp(r'[.!?:;…]$').hasMatch(l) ? l : '$l.')
+        // Отсылки к экранам приложения в SMS не нужны.
+        .map((l) => SmsText.sentences(l).where((s) => !s.contains('вкладк')).join(' '))
+        .where((l) => l.isNotEmpty)
         .toList();
     return _fit(lines);
   }

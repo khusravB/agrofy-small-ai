@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:agrofy_core/models/climate_history.dart';
 import 'package:agrofy_core/models/climate_summary.dart';
 import 'package:crypto/crypto.dart';
 import 'package:agrofy_core/remote/data_package.dart';
@@ -45,6 +46,23 @@ class FakePower extends NasaPowerService {
   }) async {
     climatologyCalls++;
     return khujand();
+  }
+
+  int historyCalls = 0;
+
+  @override
+  Future<ClimateHistory> fetchHistory({
+    required double latitude,
+    required double longitude,
+  }) async {
+    historyCalls++;
+    return ClimateHistory.fromPowerJson(
+      jsonDecode(File('../test/fixtures/khujand_history_power.json').readAsStringSync())
+          as Map<String, dynamic>,
+      latitude: latitude,
+      longitude: longitude,
+      fetchedAt: DateTime(2026, 11, 15),
+    );
   }
 
   @override
@@ -317,6 +335,11 @@ void main() {
       expect(text, startsWith('Первое'));
     });
 
+    test('висящий заголовок списка отбрасывается', () {
+      final text = SmsText.fit(['Засушливых лет 29%.', 'Тренды за 35 лет:', 'x' * 400]);
+      expect(text, 'Засушливых лет 29%.');
+    });
+
     test('точка в числе не делит предложение', () {
       expect(SmsText.sentences('NDVI 0.13 на 16.10.2026. Поле F1 40.28,69.62 сохранено.'),
           ['NDVI 0.13 на 16.10.2026.', 'Поле F1 40.28,69.62 сохранено.']);
@@ -481,8 +504,30 @@ void main() {
       await h.settle();
       final reply = (await h.sms('Что если будет засуха?')).single;
       expect(reply, isNot(contains('не диагноз')));
+      expect(reply, isNot(contains('вкладк')));
+      expect(reply, isNot(contains('загружаются')));
+      expect(h.power.historyCalls, 1);
       final observed = (await h.sms('Почва сухая, листья вянут')).single;
       expect(observed, contains('не диагноз'));
+    });
+
+    test('история догружается для поля, зарегистрированного без неё', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      h.store.fields['+992900000001']!['F1'] = FieldRecord(
+        fieldId: 'F1',
+        latitude: 40.28,
+        longitude: 69.62,
+        crop: 'ХЛОПОК',
+        registeredAt: h.now,
+        climate: h.store.fields['+992900000001']!['F1']!.climate,
+      );
+      final first = (await h.sms('Что если будет засуха?')).single;
+      expect(first, contains('загружаются'));
+      await h.settle();
+      final second = (await h.sms('А если засуха?')).single;
+      expect(second, isNot(contains('загружаются')));
     });
 
     test('культура томат и маш распознаются, советник работает', () async {

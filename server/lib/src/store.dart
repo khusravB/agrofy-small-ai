@@ -13,6 +13,10 @@ class FieldRecord {
   /// Кэш климатологии NASA POWER (закодированный ClimateSummary).
   final String? climate;
 
+  /// Кэш помесячной истории NASA POWER по годам (закодированный
+  /// ClimateHistory) — для типов лет и трендов.
+  final String? history;
+
   const FieldRecord({
     required this.fieldId,
     required this.latitude,
@@ -20,15 +24,19 @@ class FieldRecord {
     this.crop,
     required this.registeredAt,
     this.climate,
+    this.history,
   });
 
-  FieldRecord withClimate(String value) => FieldRecord(
+  FieldRecord withClimate(String value) => copyWith(climate: value);
+
+  FieldRecord copyWith({String? climate, String? history}) => FieldRecord(
         fieldId: fieldId,
         latitude: latitude,
         longitude: longitude,
         crop: crop,
         registeredAt: registeredAt,
-        climate: value,
+        climate: climate ?? this.climate,
+        history: history ?? this.history,
       );
 
   Map<String, dynamic> toJson() => {
@@ -38,6 +46,7 @@ class FieldRecord {
         'crop': crop,
         'registered_at': registeredAt.toIso8601String(),
         'climate': climate,
+        'history': history,
       };
 
   factory FieldRecord.fromJson(Map<String, dynamic> json) => FieldRecord(
@@ -47,6 +56,7 @@ class FieldRecord {
         crop: json['crop'] as String?,
         registeredAt: DateTime.parse(json['registered_at'] as String),
         climate: json['climate'] as String?,
+        history: json['history'] as String?,
       );
 }
 
