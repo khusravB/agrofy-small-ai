@@ -236,6 +236,113 @@ class Harness {
 }
 
 void main() {
+  group('Отчёты и команды INFO, FIELDS', () {
+    test('разбор команд', () {
+      expect(SmsCommand.parse('INFO').type, SmsCommandType.info);
+      expect(SmsCommand.parse('инфо f1').fieldId, 'F1');
+      expect(SmsCommand.parse('ОТЧЁТ F2').fieldId, 'F2');
+      expect(SmsCommand.parse('INFO 123').isValid, isFalse);
+      expect(SmsCommand.parse('FIELDS').type, SmsCommandType.listFields);
+      expect(SmsCommand.parse('поля').type, SmsCommandType.listFields);
+      expect(SmsCommand.formatInfo('F5'), 'INFO F5');
+      // Обычный вопрос со словом «поля» — не команда.
+      expect(SmsCommand.parse('Какие поля лучше поливать?').type, SmsCommandType.question);
+    });
+
+    test('ссылка всегда в конце и помещается в лимит', () {
+      const suffix = ' Полностью: https://sms.agrofy.test/r/AAAAAAAAAAAAAAAA';
+      final text = SmsText.fit(['Первое предложение. ' * 20], maxSegments: 3, suffix: suffix);
+      expect(text, endsWith(suffix));
+      expect(SmsText.segments(text), lessThanOrEqualTo(3));
+      expect(text, startsWith('Первое предложение.'));
+    });
+
+    Future<String> page(Harness h, String reply) async {
+      final url = RegExp(r'https://sms\.agrofy\.test(/r/[A-Za-z0-9_-]+)').firstMatch(reply)!;
+      final response = await h.app.handler(Request('GET', Uri.parse('https://sms.agrofy.test${url.group(1)}')));
+      expect(response.statusCode, 200);
+      expect(response.headers['content-type'], startsWith('text/html'));
+      return response.readAsString();
+    }
+
+    test('INFO F1: сводка в SMS и полный отчёт по ссылке', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      final reply = (await h.sms('INFO F1')).single;
+      expect(reply, startsWith('AGROFY: поле F1 (хлопок).'));
+      expect(reply, contains('Полностью: https://sms.agrofy.test/r/'));
+      expect(SmsText.segments(reply), lessThanOrEqualTo(3));
+      final html = await page(h, reply);
+      for (final heading in ['Поле F1', 'Климат участка', 'Рекомендация', 'Все варианты', 'Засушливый год']) {
+        expect(html, contains(heading));
+      }
+      expect(html, isNot(contains('вкладк')));
+    });
+
+    test('INFO чужого поля и без истории', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      final early = (await h.sms('INFO')).single;
+      expect(early, contains('загружаются'));
+      await h.settle();
+      final other = (await h.sms('INFO F1', from: '+992900000002')).single;
+      expect(other, contains('не найдено'));
+    });
+
+    test('отчёт экранирует текст из SMS', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 <script>x</script>');
+      await h.settle();
+      final html = await page(h, (await h.sms('INFO F1')).single);
+      expect(html, isNot(contains('<script>')));
+      expect(html, contains('&lt;script&gt;'));
+    });
+
+    test('длинный ответ — начало и ссылка; ссылка истекает', () async {
+      final h = await Harness.create();
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.settle();
+      final reply = (await h.sms('Как меняется климат?')).single;
+      expect(reply, contains('Полностью: '));
+      final html = await page(h, reply);
+      expect(html, contains('Как меняется климат?'));
+
+      final record = h.store.reports.values.last;
+      h.store.reports[record.token] = ReportRecord(
+        token: record.token,
+        ownerHash: record.ownerHash,
+        title: record.title,
+        createdAt: record.createdAt,
+        expiresAt: h.now.subtract(const Duration(seconds: 1)),
+      );
+      final expired = await h.app.handler(
+        Request('GET', Uri.parse('https://sms.agrofy.test/r/${record.token}')),
+      );
+      expect(expired.statusCode, 404);
+    });
+
+    test('наблюдение: короткий ответ и полный разбор по ссылке', () async {
+      final h = await Harness.create();
+      final reply = (await h.sms('листья желтеют, почва сухая')).single;
+      expect(reply, contains('не диагноз'));
+      final html = await page(h, reply);
+      expect(html, contains('Варианты'));
+      expect(html, contains('План'));
+    });
+
+    test('FIELDS перечисляет поля номера', () async {
+      final h = await Harness.create();
+      expect((await h.sms('FIELDS')).single, contains('нет полей'));
+      await h.sms('REG F1 40.28,69.62 ХЛОПОК');
+      await h.sms('REG F2 40.10,69.30 МАШ');
+      final reply = (await h.sms('ПОЛЯ')).single;
+      expect(reply, contains('F1 (хлопок'));
+      expect(reply, contains('F2 (маш'));
+      expect(reply, contains('Текущее: F2'));
+    });
+  });
+
   group('Vonage', () {
     test('подписанный вебхук: 204, ответ уходит через Messages API', () async {
       final h = await Harness.create(provider: ProviderKind.vonage);

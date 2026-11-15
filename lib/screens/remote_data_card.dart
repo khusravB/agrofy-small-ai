@@ -334,6 +334,10 @@ class _RemoteDataCardState extends State<RemoteDataCard> {
                   child: const Text('Зарегистрировать поле'),
                 ),
                 OutlinedButton(
+                  onPressed: () => _send(SmsCommand.formatInfo(_fieldId)),
+                  child: const Text('Всё о поле'),
+                ),
+                OutlinedButton(
                   onPressed: () => _send(
                     SmsCommand.formatRequest(fieldId: _fieldId, kind: DataRequestKind.ndvi),
                   ),

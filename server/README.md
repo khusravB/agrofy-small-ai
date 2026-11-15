@@ -17,6 +17,8 @@ gives; no cloud language model is called.
 | `HELP` / `ПОМОЩЬ` / `?` | Short list of commands |
 | `REG F1 40.28,69.62 ХЛОПОК` / `РЕГ …` | Registers field F1 for this phone, downloads NASA POWER climate for it once |
 | `FIELD F1` / `ПОЛЕ F1` | Makes F1 the active field for questions |
+| `INFO F1` / `ИНФО F1` (or `INFO` for the active field) | Everything about the field: a short SMS summary and a link to a full report page (climate, year types and trends, recommended and all rotations with scores and irrigation, sowing dates, drought year) |
+| `FIELDS` / `ПОЛЯ` | Fields registered from this phone |
 | `FIELD F1 NDVI 90D` | MODIS NDVI package for F1 (default 90 days, max 366) |
 | `FIELD F1 CLIMATE 1Y` | NASA POWER daily temperature and rainfall (default 1 year, max 3) |
 | `FIELD F1 HISTORY 3Y` | MODIS NDVI over several seasons (default 3 years, max 5) |
@@ -29,6 +31,13 @@ gives; no cloud language model is called.
 Periods: `90D`, `3M`, `1Y` (days, months, years). Russian works too:
 `ПОЛЕ F1 НДВИ 3М`, `ПОЛЕ F1 КЛИМАТ 1Г` (`КЛИМАТ`/`ПОГОДА`, `ИСТОРИЯ`,
 `ПОСЕВ`, `ДАННЫЕ`; periods `Д`, `М`, `Г`).
+
+When an answer does not fit, the SMS carries its beginning in whole
+sentences and a link: `… Полностью: https://<host>/r/<token>`. The link opens a
+plain mobile web page (no app needed) with the full answer; observation
+replies always link to the full analysis (reasons, options, plan). Report
+links use a random 96-bit token, expire with the packages (7 days), and are
+served with `no-store`, `noindex` and a CSP that allows no scripts.
 
 Replies are at most 3 SMS segments (459 GSM-7 or 201 Cyrillic characters). The
 first sentence always carries the "подсказка, не диагноз" caveat.

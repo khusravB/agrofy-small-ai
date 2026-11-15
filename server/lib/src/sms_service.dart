@@ -21,6 +21,7 @@ import 'package:crypto/crypto.dart';
 import 'config.dart';
 import 'data_service.dart';
 import 'providers.dart';
+import 'reports.dart';
 import 'store.dart';
 
 /// Результат обработки входящего SMS: что ответить сразу и что доделать
@@ -44,7 +45,8 @@ class SmsService {
 
   static const String helpText =
       'AGROFY: задайте вопрос текстом. Поле: REG F1 40.28,69.62 ХЛОПОК. '
-      'Выбрать: FIELD F1. Данные: FIELD F1 NDVI 90D (или CLIMATE 1Y). '
+      'Всё о поле: INFO F1. Ваши поля: FIELDS. '
+      'Спутник: FIELD F1 NDVI 90D (или CLIMATE 1Y). '
       'NEW — сброс, STOP — отписка.';
 
   final ServerConfig config;
@@ -52,6 +54,7 @@ class SmsService {
   final DataPackageService data;
   final SmsProvider provider;
   final NasaPowerService power;
+  final ReportService reports;
   final DateTime Function() clock;
 
   final FarmAssistant _assistant = FarmAssistant();
@@ -66,8 +69,10 @@ class SmsService {
     required this.data,
     required this.provider,
     NasaPowerService? power,
+    ReportService? reports,
     DateTime Function()? clock,
   })  : power = power ?? NasaPowerService(),
+        reports = reports ?? ReportService(config, store, clock: clock),
         clock = clock ?? DateTime.now;
 
   /// Обезличенный номер для журнала.
@@ -78,6 +83,18 @@ class SmsService {
 
   String _fit(List<String> parts) =>
       SmsText.fit(parts, maxSegments: config.maxReplySegments);
+
+  /// Не помещается ли текст целиком в одно SMS-сообщение (с учётом лимита
+  /// сегментов).
+  bool _fitsWhole(List<String> parts) =>
+      SmsText.segments(parts.join(' ')) <= config.maxReplySegments;
+
+  /// Начало ответа целыми предложениями и ссылка на полный текст.
+  String _withLink(List<String> parts, String url) => SmsText.fit(
+        parts,
+        maxSegments: config.maxReplySegments,
+        suffix: ' Полностью: $url',
+      );
 
   Future<void> _audit(String phone, String type, List<String> replies) async {
     final line = jsonEncode({
@@ -223,6 +240,42 @@ class SmsService {
 
       case SmsCommandType.dataRequest:
         return _dataRequest(sms, command, conversation, now);
+
+      case SmsCommandType.info:
+        return _info(sms, command, conversation, now);
+
+      case SmsCommandType.listFields:
+        final mine = store.fields[sms.from] ?? const <String, FieldRecord>{};
+        if (mine.isEmpty) {
+          return SmsOutcome([
+            _fit([
+              'AGROFY: у этого номера нет полей.',
+              'Добавьте: REG F1 40.28,69.62 ХЛОПОК',
+            ]),
+          ]);
+        }
+        final list = [
+          for (final r in mine.values)
+            '${r.fieldId} (${r.crop?.toLowerCase() ?? 'культура не указана'}, '
+                '${r.latitude.toStringAsFixed(2)},${r.longitude.toStringAsFixed(2)})',
+        ];
+        final active = conversation.activeField;
+        final parts = [
+          'AGROFY: ваши поля: ${list.join('; ')}.',
+          if (active != null) 'Текущее: $active.',
+          'Всё о поле: INFO ${active ?? mine.keys.first}.',
+        ];
+        if (_fitsWhole(parts)) {
+          return SmsOutcome([_fit(parts)]);
+        }
+        final url = await reports.publish(
+          ownerHash: phoneHash(sms.from),
+          title: 'Поля AGROFY',
+          sections: [ReportSection('Ваши поля', items: list)],
+        );
+        return SmsOutcome([
+          _withLink(['AGROFY: полей ${mine.length}.', if (active != null) 'Текущее: $active.'], url),
+        ]);
 
       case SmsCommandType.question:
         final reply = await _answer(sms, command.text ?? '', conversation, now);
@@ -403,15 +456,7 @@ class SmsService {
         ? null
         : const ClimatePatternModel().train(history);
 
-    final field = Field(
-      id: 1,
-      name: record?.fieldId ?? 'SMS',
-      location: '',
-      area: 1,
-      crop: _cropName(record?.crop),
-      latitude: record?.latitude,
-      longitude: record?.longitude,
-    );
+    final field = _fieldOf(record);
     final fieldCrop = _cropId(record?.crop);
 
     // 1. Наблюдение («листья желтеют, почва сухая») — через проверку данных
@@ -443,12 +488,28 @@ class SmsService {
           ? null
           : recommendation.plan.first.title;
       // Пометка «не диагноз» обязательна, поэтому идёт сразу за действием.
-      return _fit([
+      final parts = [
         '${recommendation.action} (подсказка, не диагноз).',
         _firstSentence(recommendation.reason),
         if (next != null && next.toLowerCase() != recommendation.action.toLowerCase())
           'Шаг: ${_lowerFirst(next)}.',
-      ]);
+      ];
+      // Полный разбор — причины, варианты, план — по ссылке.
+      final url = await reports.publish(
+        ownerHash: phoneHash(sms.from),
+        title: recommendation.action,
+        sections: [
+          ReportSection('Ваше сообщение', paragraphs: [text]),
+          ReportSection('Почему', paragraphs: [recommendation.reason]),
+          ReportSection('Варианты', items: recommendation.alternatives),
+          ReportSection('Чего ожидать', paragraphs: [recommendation.expectedOutcome]),
+          ReportSection('План', items: [
+            for (final step in recommendation.plan)
+              '${step.title}${step.dueInDays == 0 ? ' — сегодня' : ' — в течение ${step.dueInDays} дн.'}: ${step.result}',
+          ]),
+        ],
+      );
+      return _withLink(parts, url);
     }
 
     // 2. Вопрос — классификатор намерений и расчёты советника.
@@ -494,17 +555,148 @@ class SmsService {
       ]);
     }
 
-    final lines = answer.text
-        .split('\n')
-        .map((l) => l.replaceFirst(RegExp(r'^[•\-\s]+'), '').trim())
-        .where((l) => l.isNotEmpty)
-        .map((l) => RegExp(r'[.!?:;…]$').hasMatch(l) ? l : '$l.')
-        // Отсылки к экранам приложения в SMS не нужны.
-        .map((l) => SmsText.sentences(l).where((s) => !s.contains('вкладк')).join(' '))
-        .where((l) => l.isNotEmpty)
-        .toList();
-    return _fit(lines);
+    final lines = _smsLines(answer.text);
+    if (_fitsWhole(lines)) {
+      return _fit(lines);
+    }
+    final url = await reports.publish(
+      ownerHash: phoneHash(sms.from),
+      title: 'Ответ AGROFY',
+      sections: [
+        ReportSection('Вопрос', paragraphs: [text]),
+        ReportSection('Ответ', paragraphs: lines),
+      ],
+      footer: 'Источник: ${answer.source}. Подсказка, не диагноз — '
+          'решение принимает фермер вместе с агрономом.',
+    );
+    return _withLink(lines, url);
   }
+
+  /// Ответ ассистента в виде строк для SMS: без маркеров списка, с точкой
+  /// в конце и без отсылок к экранам приложения.
+  static List<String> _smsLines(String text) => text
+      .split('\n')
+      .map((l) => l.replaceFirst(RegExp(r'^[•\-\s]+'), '').trim())
+      .where((l) => l.isNotEmpty)
+      .map((l) => RegExp(r'[.!?:;…]$').hasMatch(l) ? l : '$l.')
+      .map((l) => SmsText.sentences(l).where((s) => !s.contains('вкладк')).join(' '))
+      .where((l) => l.isNotEmpty)
+      .toList();
+
+  /// INFO F1: все данные поля одним отчётом по ссылке и короткая сводка.
+  Future<SmsOutcome> _info(
+    InboundSms sms,
+    SmsCommand command,
+    Conversation conversation,
+    DateTime now,
+  ) async {
+    final id = command.fieldId ?? conversation.activeField;
+    if (id == null) {
+      return SmsOutcome([
+        _fit(['AGROFY: укажите поле: INFO F1.', 'Список полей: FIELDS.']),
+      ]);
+    }
+    final record = store.fields[sms.from]?[id];
+    if (record == null) {
+      return SmsOutcome([
+        _fit([
+          'AGROFY: поле $id не найдено для этого номера.',
+          'Зарегистрируйте: REG $id 40.28,69.62 ХЛОПОК',
+        ]),
+      ]);
+    }
+    conversation.activeField = id;
+
+    final climate = await _climateFor(sms.from, record);
+    final history = _cachedHistory(store.fields[sms.from]?[id]);
+    if (climate == null || history == null) {
+      return SmsOutcome(
+        [
+          _fit([
+            'AGROFY: данные NASA для поля $id ещё загружаются.',
+            'Повторите INFO $id через 1–2 минуты.',
+          ]),
+        ],
+        () => _historyFor(sms.from, store.fields[sms.from]?[id] ?? record).then((_) {}),
+      );
+    }
+
+    final patterns = history.years.length < 6 ? null : const ClimatePatternModel().train(history);
+    final field = _fieldOf(record);
+    final cropId = _cropId(record.crop);
+    final result = _advisor.advise(
+      field: field,
+      historyCropIds: cropId == null ? const [] : [cropId],
+      climate: climate,
+      patterns: patterns,
+    );
+    final context = AssistantContext(
+      field: field,
+      result: result,
+      climate: climate,
+      patterns: patterns,
+    );
+    List<String> ask(String question) => _smsLines(_assistant.answer(question, context).text);
+
+    final cropName = record.crop?.toLowerCase();
+    final best = result.best;
+    final sections = [
+      ReportSection('Поле', items: [
+        'ID: ${record.fieldId}',
+        'Координаты: ${record.latitude.toStringAsFixed(4)}, ${record.longitude.toStringAsFixed(4)}',
+        'Культура: ${cropName ?? 'не указана'}',
+      ]),
+      ReportSection('Климат участка (NASA POWER)', paragraphs: ask('Как меняется климат?')),
+      if (result.blocker != null)
+        ReportSection('Севооборот', paragraphs: [
+          result.blocker!,
+          'Укажите культуру: REG ${record.fieldId} '
+              '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)} ХЛОПОК',
+        ])
+      else ...[
+        ReportSection('Рекомендация', paragraphs: ask('Какой севооборот лучше?')),
+        ReportSection('Все варианты', items: [
+          for (final s in result.strategies)
+            '${s.title}: ${s.sequenceLabel} — ${s.total.round()} из 100, '
+                'полив около ${s.avgIrrigationMm.round()} мм в год',
+        ]),
+        ReportSection('Сроки посева', paragraphs: ask('Когда сеять ${cropName ?? ''}?')),
+        ReportSection('Засушливый год', paragraphs: ask('Что если будет засуха?')),
+      ],
+      ReportSection('Откуда данные', items: [
+        'NASA POWER: климатология и помесячная история '
+            '${history.years.first.year}–${history.years.last.year}, ячейка около 50 км',
+        'Справочник культур AGROFY (общие значения, без проверки агрономом)',
+        'Спутниковые данные поля: FIELD ${record.fieldId} NDVI 90D',
+      ]),
+    ];
+    final url = await reports.publish(
+      ownerHash: phoneHash(sms.from),
+      title: 'Поле ${record.fieldId}${cropName == null ? '' : ' · $cropName'}',
+      sections: sections,
+    );
+
+    final summary = <String>[
+      'AGROFY: поле ${record.fieldId}${cropName == null ? '' : ' ($cropName)'}.',
+      if (best != null && !best.isCurrent)
+        'Советую «${best.title}»: ${best.total.round()} из 100.'
+      else if (best != null)
+        'Текущий севооборот лучший: ${best.total.round()} из 100.'
+      else
+        'Культура не указана — севооборот не рассчитан.',
+    ];
+    return SmsOutcome([_withLink(summary, url)]);
+  }
+
+  static Field _fieldOf(FieldRecord? record) => Field(
+        id: 1,
+        name: record?.fieldId ?? 'SMS',
+        location: '',
+        area: 1,
+        crop: _cropName(record?.crop),
+        latitude: record?.latitude,
+        longitude: record?.longitude,
+      );
 
   /// «Что если будет засуха?» — сценарий, а не наблюдение с поля.
   static final RegExp _hypothetical = RegExp(

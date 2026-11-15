@@ -59,20 +59,23 @@ class SmsText {
       ];
 
   /// Собирает ответ из частей по порядку важности, целыми предложениями:
-  /// предложение добавляется, только если весь текст остаётся в пределах
-  /// [maxSegments]; на первом не поместившемся предложении часть
-  /// заканчивается и начинается следующая. Обрезается по слову только первое
-  /// предложение, если оно одно длиннее лимита.
-  static String fit(List<String> parts, {int maxSegments = 3}) {
+  /// предложение добавляется, только если весь текст (вместе с [suffix])
+  /// остаётся в пределах [maxSegments]; на первом не поместившемся
+  /// предложении часть заканчивается и начинается следующая. Обрезается по
+  /// слову только первое предложение, если оно одно длиннее лимита.
+  /// [suffix] — то, что всегда стоит в конце (например, ссылка).
+  static String fit(List<String> parts, {int maxSegments = 3, String suffix = ''}) {
+    bool fits(String text) => segments('$text$suffix') <= maxSegments;
+
     var text = '';
     for (final part in parts) {
       for (final sentence in sentences(part)) {
         final candidate = text.isEmpty ? sentence : '$text $sentence';
-        if (segments(candidate) <= maxSegments) {
+        if (fits(candidate)) {
           text = candidate;
         } else {
           if (text.isEmpty) {
-            text = truncate(sentence, maxSegments);
+            text = truncate(sentence, maxSegments, reserve: suffix);
           }
           break;
         }
@@ -84,15 +87,16 @@ class SmsText {
     while (kept.length > 1 && kept.last.endsWith(':')) {
       kept.removeLast();
     }
-    return kept.join(' ');
+    return '${kept.join(' ')}$suffix';
   }
 
-  /// Обрезает текст по границе слова, чтобы он поместился в [maxSegments].
-  static String truncate(String text, int maxSegments) {
-    if (segments(text) <= maxSegments) {
+  /// Обрезает текст по границе слова, чтобы он вместе с [reserve]
+  /// поместился в [maxSegments].
+  static String truncate(String text, int maxSegments, {String reserve = ''}) {
+    if (segments('$text$reserve') <= maxSegments) {
       return text;
     }
-    final limit = capacity(text, maxSegments) - 1;
+    final limit = capacity('$text$reserve', maxSegments) - reserve.length - 1;
     var cut = text.substring(0, limit.clamp(0, text.length));
     final space = cut.lastIndexOf(' ');
     if (space > limit ~/ 2) {

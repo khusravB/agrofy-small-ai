@@ -114,6 +114,11 @@ itself never reads SMS.
   app, using the field's NASA climate. Replies fit in 3 SMS segments and keep the
   "подсказка, не диагноз" caveat. Follow-ups use the facts of the conversation
   (24 hours): "листья желтеют" → "в основном нижние, почва влажная".
+- **Field report by SMS.** `INFO F5` (button «Всё о поле») returns a short
+  summary and a link to a web page with everything the server knows about
+  the field: NASA climate, year types and trends, rotations with scores and
+  irrigation, sowing dates, a drought year. Any answer too long for SMS
+  comes as its beginning plus a «Полностью» link to the full text.
 - **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые
   данные» prepares `REG F5 lat,lon CROP`, `FIELD F5 NDVI 3M` or
   `FIELD F5 CLIMATE 1Y`. The server builds a JSON package from MODIS NDVI

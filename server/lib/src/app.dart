@@ -37,7 +37,8 @@ class SmsServerApp {
       // Статусы доставки (Vonage Status URL): принимаем без обработки, чтобы
       // провайдер не повторял их.
       ..post('${provider.inboundPath}/status', (Request _) => Response(204))
-      ..get('/p/<token>', _download);
+      ..get('/p/<token>', _download)
+      ..get('/r/<token>', _report);
 
     return const Pipeline().addMiddleware(_errors).addHandler(router.call);
   }
@@ -92,6 +93,27 @@ class SmsServerApp {
     });
     pending.add(task);
     unawaited(task.whenComplete(() => pending.remove(task)));
+  }
+
+  Future<Response> _report(Request request, String token) async {
+    final record = store.reports[token];
+    final file = File('${store.reportsDir.path}/$token.html');
+    if (record == null || clock().isAfter(record.expiresAt) || !await file.exists()) {
+      return Response.notFound(
+        'Ссылка недействительна или срок её действия истёк.',
+        headers: {'content-type': 'text/plain; charset=utf-8'},
+      );
+    }
+    return Response.ok(
+      file.openRead(),
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-robots-tag': 'noindex',
+        'referrer-policy': 'no-referrer',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+      },
+    );
   }
 
   Future<Response> _download(Request request, String token) async {

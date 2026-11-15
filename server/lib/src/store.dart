@@ -141,6 +141,39 @@ class PackageRecord {
       );
 }
 
+/// Отчёт для чтения в браузере: длинный ответ или все данные поля.
+class ReportRecord {
+  final String token;
+  final String ownerHash;
+  final String title;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+
+  const ReportRecord({
+    required this.token,
+    required this.ownerHash,
+    required this.title,
+    required this.createdAt,
+    required this.expiresAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'token': token,
+        'owner_hash': ownerHash,
+        'title': title,
+        'created_at': createdAt.toIso8601String(),
+        'expires_at': expiresAt.toIso8601String(),
+      };
+
+  factory ReportRecord.fromJson(Map<String, dynamic> json) => ReportRecord(
+        token: json['token'] as String,
+        ownerHash: json['owner_hash'] as String,
+        title: json['title'] as String,
+        createdAt: DateTime.parse(json['created_at'] as String),
+        expiresAt: DateTime.parse(json['expires_at'] as String),
+      );
+}
+
 /// Простое файловое хранилище: один JSON-файл, атомарная запись.
 /// Для пилота достаточно; при росте — заменить на базу данных.
 class Store {
@@ -148,6 +181,7 @@ class Store {
   final Map<String, Map<String, FieldRecord>> fields = {};
   final Map<String, Conversation> conversations = {};
   final Map<String, PackageRecord> packages = {};
+  final Map<String, ReportRecord> reports = {};
 
   /// Идентификаторы уже обработанных сообщений — защита от повторов.
   final Map<String, DateTime> seenMessages = {};
@@ -162,11 +196,13 @@ class Store {
 
   File get _file => File('${dir.path}/store.json');
   Directory get packagesDir => Directory('${dir.path}/packages');
+  Directory get reportsDir => Directory('${dir.path}/reports');
 
   static Future<Store> open(String path) async {
     final store = Store(Directory(path));
     await store.dir.create(recursive: true);
     await store.packagesDir.create(recursive: true);
+    await store.reportsDir.create(recursive: true);
     if (await store._file.exists()) {
       store._load(jsonDecode(await store._file.readAsString()) as Map<String, dynamic>);
     }
@@ -185,6 +221,9 @@ class Store {
     });
     (json['packages'] as Map<String, dynamic>? ?? {}).forEach((token, value) {
       packages[token] = PackageRecord.fromJson(value as Map<String, dynamic>);
+    });
+    (json['reports'] as Map<String, dynamic>? ?? {}).forEach((token, value) {
+      reports[token] = ReportRecord.fromJson(value as Map<String, dynamic>);
     });
     (json['seen'] as Map<String, dynamic>? ?? {}).forEach((id, value) {
       seenMessages[id] = DateTime.parse('$value');
@@ -208,6 +247,7 @@ class Store {
         for (final e in conversations.entries) e.key: e.value.toJson(),
       },
       'packages': {for (final e in packages.entries) e.key: e.value.toJson()},
+      'reports': {for (final e in reports.entries) e.key: e.value.toJson()},
       'seen': {
         for (final e in seenMessages.entries) e.key: e.value.toIso8601String(),
       },
@@ -244,6 +284,18 @@ class Store {
     for (final token in expired) {
       packages.remove(token);
       final file = File('${packagesDir.path}/$token.json');
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+
+    final expiredReports = [
+      for (final r in reports.values)
+        if (now.isAfter(r.expiresAt)) r.token,
+    ];
+    for (final token in expiredReports) {
+      reports.remove(token);
+      final file = File('${reportsDir.path}/$token.html');
       if (await file.exists()) {
         await file.delete();
       }

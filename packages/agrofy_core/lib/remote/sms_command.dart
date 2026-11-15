@@ -10,6 +10,12 @@ enum SmsCommandType {
   register,
   selectField,
   dataRequest,
+
+  /// Все данные поля одним отчётом: INFO F1 (или INFO — активное поле).
+  info,
+
+  /// Список полей этого номера: FIELDS.
+  listFields,
   question,
 }
 
@@ -105,7 +111,11 @@ class SmsCommand {
     'СТАРТ': SmsCommandType.start,
     'NEW': SmsCommandType.reset,
     'НОВЫЙ': SmsCommandType.reset,
+    'FIELDS': SmsCommandType.listFields,
+    'ПОЛЯ': SmsCommandType.listFields,
   };
+
+  static const Set<String> _infoWords = {'INFO', 'ИНФО', 'REPORT', 'ОТЧЕТ', 'ОТЧЁТ'};
 
   static SmsCommand parse(String raw) {
     final text = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
@@ -118,6 +128,20 @@ class SmsCommand {
 
     if (head == 'REG' || head == 'РЕГ') {
       return _parseRegister(words.skip(1).toList());
+    }
+
+    if (_infoWords.contains(head) && words.length <= 2) {
+      if (words.length == 1) {
+        return const SmsCommand(SmsCommandType.info);
+      }
+      final id = words[1].toUpperCase();
+      if (!_fieldId.hasMatch(id)) {
+        return const SmsCommand(
+          SmsCommandType.info,
+          error: 'Формат: INFO F1 (или просто INFO — для текущего поля).',
+        );
+      }
+      return SmsCommand(SmsCommandType.info, fieldId: id);
     }
 
     if (head == 'FIELD' || head == 'ПОЛЕ') {
@@ -257,6 +281,9 @@ class SmsCommand {
 
   static String formatRegister(String fieldId, GeoPoint point, {String? crop}) =>
       'REG $fieldId ${point.format()}${crop == null ? '' : ' $crop'}';
+
+  /// Текст SMS «все данные поля».
+  static String formatInfo(String fieldId) => 'INFO $fieldId';
 
   static String formatRequest({
     String? fieldId,
