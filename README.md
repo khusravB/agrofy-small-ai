@@ -127,7 +127,7 @@ itself never reads SMS.
   in the advisor ("NDVI below 0.2 in Aug, Oct…"); it never changes the
   recommendation by itself.
 
-Security on the server: signed webhooks (Twilio HMAC-SHA1 or HMAC-SHA256 with a
+Security on the server: signed webhooks (Vonage JWT, Twilio HMAC-SHA1 or HMAC-SHA256 with a
 timestamp), replay protection, per-phone limits, HELP/STOP, owner-only access to
 field data, hashed phone numbers in the audit log, random expiring links.
 

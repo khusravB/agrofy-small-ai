@@ -38,6 +38,13 @@ abstract class SmsProvider {
 
   Future<void> send(String to, String text);
 
+  /// Путь вебхука для входящих SMS.
+  String get inboundPath;
+
+  /// true — ответы уходят в теле ответа на вебхук (Twilio, свой шлюз);
+  /// false — провайдер ждёт просто 200, а ответы отправляются через [send].
+  bool get repliesInWebhook => true;
+
   /// Сравнение без утечки времени.
   static bool safeEquals(String a, String b) {
     if (a.length != b.length) {
@@ -62,6 +69,9 @@ class TwilioProvider extends SmsProvider {
 
   TwilioProvider(this.config, {http.Client? client})
       : client = client ?? http.Client();
+
+  @override
+  String get inboundPath => '/sms/twilio';
 
   static String signature(String authToken, String url, Map<String, String> params) {
     final keys = params.keys.toList()..sort();
@@ -145,6 +155,9 @@ class GenericProvider extends SmsProvider {
       : client = client ?? http.Client(),
         clock = clock ?? DateTime.now;
 
+  @override
+  String get inboundPath => '/sms/inbound';
+
   static String signature(String secret, String timestamp, String body) =>
       Hmac(sha256, utf8.encode(secret))
           .convert(utf8.encode('$timestamp.$body'))
@@ -213,6 +226,139 @@ class GenericProvider extends SmsProvider {
     );
     if (response.statusCode >= 300) {
       throw Exception('Шлюз: ${response.statusCode}');
+    }
+  }
+}
+
+
+/// Vonage Messages API. Вебхук подписан JWT (HS256, ключ — Signature secret
+/// аккаунта) в заголовке Authorization; claim payload_hash — SHA-256 тела.
+/// Ответы отправляются отдельным запросом к /v1/messages.
+class VonageProvider extends SmsProvider {
+  /// Сколько может пройти между подписью и приёмом (с учётом повторов
+  /// доставки). Повтор того же сообщения отсекается по message_uuid.
+  static const Duration maxAge = Duration(hours: 1);
+
+  final ServerConfig config;
+  final http.Client client;
+  final DateTime Function() clock;
+
+  VonageProvider(this.config, {http.Client? client, DateTime Function()? clock})
+      : client = client ?? http.Client(),
+        clock = clock ?? DateTime.now;
+
+  @override
+  String get inboundPath => '/sms/vonage';
+
+  @override
+  bool get repliesInWebhook => false;
+
+  static String _b64(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
+
+  static Map<String, Object?> _json(String part) {
+    final decoded = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(part))));
+    if (decoded is! Map<String, Object?>) {
+      throw const FormatException('not an object');
+    }
+    return decoded;
+  }
+
+  /// JWT, как его подписывает Vonage (для тестов и локальной проверки).
+  static String sign(String secret, Map<String, Object?> claims) {
+    final header = _b64(utf8.encode(jsonEncode({'alg': 'HS256', 'typ': 'JWT'})));
+    final payload = _b64(utf8.encode(jsonEncode(claims)));
+    final mac = Hmac(sha256, utf8.encode(secret)).convert(utf8.encode('$header.$payload'));
+    return '$header.$payload.${_b64(mac.bytes)}';
+  }
+
+  @override
+  Future<InboundSms> parse(Request request, String body) async {
+    final auth = request.headers['authorization'] ?? '';
+    final token = auth.startsWith('Bearer ') ? auth.substring(7).trim() : '';
+    final parts = token.split('.');
+    if (parts.length != 3) {
+      throw const WebhookRejected(401, 'missing jwt');
+    }
+
+    final Map<String, Object?> header;
+    final Map<String, Object?> claims;
+    try {
+      header = _json(parts[0]);
+      claims = _json(parts[1]);
+    } on Object {
+      throw const WebhookRejected(401, 'bad jwt');
+    }
+    if (header['alg'] != 'HS256') {
+      throw const WebhookRejected(401, 'bad jwt alg');
+    }
+    final mac = Hmac(sha256, utf8.encode(config.vonageSignatureSecret!))
+        .convert(utf8.encode('${parts[0]}.${parts[1]}'));
+    if (!SmsProvider.safeEquals(_b64(mac.bytes), parts[2])) {
+      throw const WebhookRejected(403, 'bad signature');
+    }
+
+    final apiKey = claims['api_key'];
+    if (apiKey != null && apiKey != config.vonageApiKey) {
+      throw const WebhookRejected(403, 'wrong api key');
+    }
+    final iat = claims['iat'];
+    if (iat is! num) {
+      throw const WebhookRejected(401, 'missing iat');
+    }
+    final signedAt = DateTime.fromMillisecondsSinceEpoch(iat.toInt() * 1000);
+    if (clock().difference(signedAt).abs() > maxAge) {
+      throw const WebhookRejected(401, 'stale jwt');
+    }
+    final hash = claims['payload_hash'];
+    if (hash is String &&
+        !SmsProvider.safeEquals(sha256.convert(utf8.encode(body)).toString(), hash.toLowerCase())) {
+      throw const WebhookRejected(403, 'payload hash mismatch');
+    }
+
+    Object? json;
+    try {
+      json = jsonDecode(body);
+    } on FormatException {
+      throw const WebhookRejected(400, 'bad json');
+    }
+    if (json is! Map || json['from'] is! String || json['message_uuid'] is! String) {
+      throw const WebhookRejected(400, 'missing fields');
+    }
+    if (json['channel'] != null && json['channel'] != 'sms') {
+      throw const WebhookRejected(400, 'not sms');
+    }
+    final digits = (json['from'] as String).replaceAll(RegExp(r'\D'), '');
+    return InboundSms(
+      from: '+$digits',
+      text: '${json['text'] ?? ''}',
+      messageId: 'vonage:${json['message_uuid']}',
+    );
+  }
+
+  @override
+  Response respond(List<String> replies) => Response(204);
+
+  @override
+  Future<void> send(String to, String text) async {
+    final credentials =
+        base64.encode(utf8.encode('${config.vonageApiKey}:${config.vonageApiSecret}'));
+    final response = await client.post(
+      Uri.https('api.nexmo.com', '/v1/messages'),
+      headers: {
+        'authorization': 'Basic $credentials',
+        'content-type': 'application/json',
+        'accept': 'application/json',
+      },
+      body: jsonEncode({
+        'message_type': 'text',
+        'channel': 'sms',
+        'to': to.replaceAll(RegExp(r'\D'), ''),
+        'from': config.vonageFrom!.replaceAll(RegExp(r'^\+'), ''),
+        'text': text,
+      }),
+    );
+    if (response.statusCode >= 300) {
+      throw Exception('Vonage: ${response.statusCode} ${response.body}');
     }
   }
 }

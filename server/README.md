@@ -60,7 +60,7 @@ the advisor, never an automatic recommendation.
 
 ## Security
 
-- Every webhook is authenticated: Twilio by `X-Twilio-Signature` (HMAC-SHA1 of
+- Every webhook is authenticated: Vonage by a signed JWT (see Deploy), Twilio by `X-Twilio-Signature` (HMAC-SHA1 of
   the public URL and the sorted parameters), the generic provider by
   `X-Agrofy-Signature` = hex HMAC-SHA256 of `"<timestamp>.<body>"`, where
   `X-Agrofy-Timestamp` (Unix seconds) must be within ±5 minutes. Unsigned or stale requests are rejected (401/403).
@@ -101,7 +101,8 @@ dart test
 
 ## Deploy
 
-Step-by-step guide for a VPS with Docker, Caddy (automatic HTTPS) and Twilio:
+Step-by-step guide for a VPS with Docker, Caddy (automatic HTTPS) and Vonage
+or Twilio:
 [deploy/README.md](deploy/README.md) (in Russian). The image is built from the
 repository root:
 
@@ -109,9 +110,10 @@ repository root:
 docker build -f server/Dockerfile -t agrofy-sms .
 ```
 
-Note: Twilio does not support two-way SMS in Tajikistan and has no local
-numbers there, so a Twilio number suits a demo; a pilot needs a local gateway
-(`generic` provider) or an operator contract.
+Note: neither Twilio nor Vonage offers local Tajik numbers, and Twilio states
+two-way SMS is not supported there. A foreign number suits a demo once tested
+from each operator's SIM; a pilot needs a local gateway (`generic` provider) or
+an operator contract.
 
 The server is a single Dart process with a JSON state file; any host that runs
 Dart or a Docker image with Dart works. It needs a public HTTPS URL.
@@ -121,11 +123,19 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `PORT` | Listen port (default 8080) |
 | `AGROFY_PUBLIC_URL` | Public base URL; used in links and for Twilio signatures |
 | `AGROFY_DATA_DIR` | State, packages and logs (default `./data`) |
-| `AGROFY_SMS_PROVIDER` | `twilio` or `generic` (default) |
+| `AGROFY_SMS_PROVIDER` | `vonage`, `twilio` or `generic` (default) |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | Twilio account and sender number |
+| `VONAGE_API_KEY`, `VONAGE_API_SECRET`, `VONAGE_SIGNATURE_SECRET`, `VONAGE_FROM` | Vonage account (Messages API) and sender number, digits only |
 | `AGROFY_WEBHOOK_SECRET` | Generic provider: shared secret, 16+ characters |
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
+
+Vonage: create an application with the Messages capability, Inbound URL
+`https://<host>/sms/vonage`, Status URL `https://<host>/sms/vonage/status`, and
+link the number; set the account's SMS setting to Messages API. Webhooks are
+verified by the JWT in `Authorization` (HS256 with the signature secret,
+`payload_hash` = SHA-256 of the body, issued within the last hour); replies are
+sent through `POST /v1/messages`, the webhook itself gets 204.
 
 Twilio: point the number's incoming-message webhook to
 `https://<host>/sms/twilio` (HTTP POST). Generic SMS gateways (local operators,

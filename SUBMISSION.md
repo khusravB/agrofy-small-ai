@@ -152,7 +152,7 @@ an optional 491 MB download.
 - sqflite, flutter_map, latlong2, geolocator, http, path_provider
 - llamadart / llama.cpp with Qwen2.5-0.5B-Instruct (GGUF)
 - NASA POWER API, NASA GIBS, OpenTopoData (SRTM), ORNL DAAC MODIS web service
-- SMS server: Dart, shelf; Twilio or any HTTP SMS gateway
+- SMS server: Dart, shelf, Docker; Vonage, Twilio or any HTTP SMS gateway
 
 ## NASA Data
 

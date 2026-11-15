@@ -33,10 +33,10 @@ class SmsServerApp {
   Handler get handler {
     final router = Router()
       ..get('/health', (Request _) => Response.ok('ok'))
-      ..post(
-        config.provider == ProviderKind.twilio ? '/sms/twilio' : '/sms/inbound',
-        _inbound,
-      )
+      ..post(provider.inboundPath, _inbound)
+      // Статусы доставки (Vonage Status URL): принимаем без обработки, чтобы
+      // провайдер не повторял их.
+      ..post('${provider.inboundPath}/status', (Request _) => Response(204))
       ..get('/p/<token>', _download);
 
     return const Pipeline().addMiddleware(_errors).addHandler(router.call);
@@ -69,14 +69,29 @@ class SmsServerApp {
 
     final background = outcome.background;
     if (background != null) {
-      final task = background().catchError((Object e) {
-        stderr.writeln('Фоновая задача не выполнена: $e');
-      });
-      pending.add(task);
-      unawaited(task.whenComplete(() => pending.remove(task)));
+      _track(background());
     }
 
-    return provider.respond(outcome.replies);
+    if (provider.repliesInWebhook) {
+      return provider.respond(outcome.replies);
+    }
+    // Провайдер ждёт быстрый 200; ответы — отдельными запросами, по порядку.
+    if (outcome.replies.isNotEmpty) {
+      _track(() async {
+        for (final reply in outcome.replies) {
+          await provider.send(sms.from, reply);
+        }
+      }());
+    }
+    return provider.respond(const []);
+  }
+
+  void _track(Future<void> work) {
+    final task = work.catchError((Object e) {
+      stderr.writeln('Фоновая задача не выполнена: $e');
+    });
+    pending.add(task);
+    unawaited(task.whenComplete(() => pending.remove(task)));
   }
 
   Future<Response> _download(Request request, String token) async {

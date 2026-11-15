@@ -1,6 +1,6 @@
 import 'dart:io';
 
-enum ProviderKind { twilio, generic }
+enum ProviderKind { twilio, vonage, generic }
 
 /// Настройки сервера из переменных окружения. Секреты в код не попадают.
 class ServerConfig {
@@ -17,6 +17,12 @@ class ServerConfig {
   final String? twilioAccountSid;
   final String? twilioAuthToken;
   final String? twilioFrom;
+
+  // Vonage (Messages API)
+  final String? vonageApiKey;
+  final String? vonageApiSecret;
+  final String? vonageSignatureSecret;
+  final String? vonageFrom;
 
   // Универсальный шлюз (например, Android-телефон с SMS-шлюзом)
   final String? webhookSecret;
@@ -40,6 +46,10 @@ class ServerConfig {
     this.twilioAccountSid,
     this.twilioAuthToken,
     this.twilioFrom,
+    this.vonageApiKey,
+    this.vonageApiSecret,
+    this.vonageSignatureSecret,
+    this.vonageFrom,
     this.webhookSecret,
     this.outboundUrl,
     this.auditSalt = 'agrofy',
@@ -60,12 +70,18 @@ class ServerConfig {
       publicUrl: (e['AGROFY_PUBLIC_URL'] ?? 'http://localhost:8080')
           .replaceAll(RegExp(r'/+$'), ''),
       dataDir: e['AGROFY_DATA_DIR'] ?? 'data',
-      provider: e['AGROFY_SMS_PROVIDER'] == 'twilio'
-          ? ProviderKind.twilio
-          : ProviderKind.generic,
+      provider: switch (e['AGROFY_SMS_PROVIDER']) {
+        'twilio' => ProviderKind.twilio,
+        'vonage' => ProviderKind.vonage,
+        _ => ProviderKind.generic,
+      },
       twilioAccountSid: e['TWILIO_ACCOUNT_SID'],
       twilioAuthToken: e['TWILIO_AUTH_TOKEN'],
       twilioFrom: e['TWILIO_FROM'],
+      vonageApiKey: e['VONAGE_API_KEY'],
+      vonageApiSecret: e['VONAGE_API_SECRET'],
+      vonageSignatureSecret: e['VONAGE_SIGNATURE_SECRET'],
+      vonageFrom: e['VONAGE_FROM'],
       webhookSecret: e['AGROFY_WEBHOOK_SECRET'],
       outboundUrl: e['AGROFY_OUTBOUND_URL'],
       auditSalt: e['AGROFY_AUDIT_SALT'] ?? 'agrofy',
@@ -82,10 +98,17 @@ class ServerConfig {
       if (provider == ProviderKind.twilio &&
           (twilioAccountSid == null || twilioAuthToken == null || twilioFrom == null))
         'Для Twilio нужны TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN и TWILIO_FROM.',
-      if (provider == ProviderKind.twilio && !publicUrl.startsWith('https://'))
-        'Для Twilio AGROFY_PUBLIC_URL должен быть публичным адресом https://… '
-            '(по нему проверяется подпись вебхука).',
-      if (provider == ProviderKind.twilio && auditSalt.length < 16)
+      if (provider == ProviderKind.vonage &&
+          (vonageApiKey == null ||
+              vonageApiSecret == null ||
+              vonageSignatureSecret == null ||
+              vonageFrom == null))
+        'Для Vonage нужны VONAGE_API_KEY, VONAGE_API_SECRET, '
+            'VONAGE_SIGNATURE_SECRET и VONAGE_FROM.',
+      if (provider != ProviderKind.generic && !publicUrl.startsWith('https://'))
+        'AGROFY_PUBLIC_URL должен быть публичным адресом https://… — на него '
+            'провайдер шлёт вебхуки и по нему строятся ссылки на пакеты.',
+      if (provider != ProviderKind.generic && auditSalt.length < 16)
         'Задайте AGROFY_AUDIT_SALT (от 16 символов) — иначе хеши телефонов в '
             'журнале легко подобрать.',
       if (provider == ProviderKind.generic &&

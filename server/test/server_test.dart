@@ -2,12 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:agrofy_core/models/climate_summary.dart';
+import 'package:crypto/crypto.dart';
 import 'package:agrofy_core/remote/data_package.dart';
 import 'package:agrofy_core/remote/sms_command.dart';
 import 'package:agrofy_core/remote/sms_text.dart';
 import 'package:agrofy_core/services/modis_service.dart';
 import 'package:agrofy_core/services/nasa_power_service.dart';
 import 'package:agrofy_sms_server/agrofy_sms_server.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 
@@ -64,6 +67,10 @@ class FakePower extends NasaPowerService {
   }
 }
 
+const vonageSecret = 'vonage-signature-secret-0123456789';
+
+String sha256Hex(String body) => sha256.convert(utf8.encode(body)).toString();
+
 class Harness {
   final Directory dir;
   final DateTime now;
@@ -71,7 +78,10 @@ class Harness {
   final Store store;
   final FakePower power;
 
-  Harness._(this.dir, this.now, this.app, this.store, this.power);
+  /// Запросы к API провайдера (Vonage).
+  final List<http.Request> apiCalls;
+
+  Harness._(this.dir, this.now, this.app, this.store, this.power, this.apiCalls);
 
   static Future<Harness> create({
     List<NdviObservation>? ndvi,
@@ -88,14 +98,25 @@ class Harness {
       twilioAccountSid: 'AC123',
       twilioAuthToken: 'twilio-token',
       twilioFrom: '+15550001111',
+      vonageApiKey: 'vkey',
+      vonageApiSecret: 'vsecret',
+      vonageSignatureSecret: vonageSecret,
+      vonageFrom: '15550002222',
       maxPerHour: maxPerHour,
     );
     final store = await Store.open(dir.path);
     final power = FakePower();
     DateTime clock() => now;
-    final SmsProvider smsProvider = provider == ProviderKind.twilio
-        ? TwilioProvider(config)
-        : GenericProvider(config, clock: clock);
+    final apiCalls = <http.Request>[];
+    final client = MockClient((request) async {
+      apiCalls.add(request);
+      return http.Response('{"message_uuid":"out"}', 202);
+    });
+    final SmsProvider smsProvider = switch (provider) {
+      ProviderKind.twilio => TwilioProvider(config),
+      ProviderKind.vonage => VonageProvider(config, client: client, clock: clock),
+      ProviderKind.generic => GenericProvider(config, clock: clock),
+    };
     final app = SmsServerApp(
       config: config,
       store: store,
@@ -121,7 +142,7 @@ class Harness {
         ),
       ),
     );
-    return Harness._(dir, now, app, store, power);
+    return Harness._(dir, now, app, store, power, apiCalls);
   }
 
   int _id = 0;
@@ -147,6 +168,37 @@ class Harness {
     return [for (final r in json['replies'] as List) '$r'];
   }
 
+  Future<Response> vonage(
+    String text, {
+    String id = 'uuid-1',
+    String? jwtSecret,
+    int? iatOffsetSeconds,
+    String? payloadHash,
+    String apiKey = 'vkey',
+  }) async {
+    final body = jsonEncode({
+      'channel': 'sms',
+      'message_uuid': id,
+      'to': '15550002222',
+      'from': '992900000001',
+      'text': text,
+      'timestamp': '2026-11-15T12:00:00Z',
+    });
+    final jwt = VonageProvider.sign(jwtSecret ?? vonageSecret, {
+      'iat': now.millisecondsSinceEpoch ~/ 1000 + (iatOffsetSeconds ?? 0),
+      'jti': 'j-$id',
+      'iss': 'Vonage',
+      'api_key': apiKey,
+      'payload_hash': payloadHash ?? sha256Hex(body),
+    });
+    return await app.handler(Request(
+      'POST',
+      Uri.parse('https://sms.agrofy.test/sms/vonage'),
+      body: body,
+      headers: {'content-type': 'application/json', 'authorization': 'Bearer $jwt'},
+    ));
+  }
+
   Future<void> settle() async {
     while (app.pending.isNotEmpty) {
       await Future.wait(List.of(app.pending));
@@ -166,6 +218,73 @@ class Harness {
 }
 
 void main() {
+  group('Vonage', () {
+    test('подписанный вебхук: 204, ответ уходит через Messages API', () async {
+      final h = await Harness.create(provider: ProviderKind.vonage);
+      final response = await h.vonage('HELP');
+      expect(response.statusCode, 204);
+      await h.settle();
+      expect(h.apiCalls, hasLength(1));
+      final call = h.apiCalls.single;
+      expect(call.url.toString(), 'https://api.nexmo.com/v1/messages');
+      expect(call.headers['authorization'], 'Basic ${base64.encode(utf8.encode('vkey:vsecret'))}');
+      final sent = jsonDecode(call.body) as Map;
+      expect(sent['to'], '992900000001');
+      expect(sent['from'], '15550002222');
+      expect(sent['channel'], 'sms');
+      expect(sent['text'], startsWith('AGROFY'));
+    });
+
+    test('повтор того же message_uuid не обрабатывается дважды', () async {
+      final h = await Harness.create(provider: ProviderKind.vonage);
+      await h.vonage('HELP', id: 'same');
+      await h.vonage('HELP', id: 'same');
+      await h.settle();
+      expect(h.apiCalls, hasLength(1));
+    });
+
+    test('чужой ключ, подмена тела, старый токен и другой api_key отклоняются', () async {
+      final h = await Harness.create(provider: ProviderKind.vonage);
+      expect((await h.vonage('HELP', jwtSecret: 'wrong-secret-wrong-secret')).statusCode, 403);
+      expect((await h.vonage('HELP', id: 'b', payloadHash: sha256Hex('other'))).statusCode, 403);
+      expect((await h.vonage('HELP', id: 'c', iatOffsetSeconds: -7200)).statusCode, 401);
+      expect((await h.vonage('HELP', id: 'd', apiKey: 'other')).statusCode, 403);
+      await h.settle();
+      expect(h.apiCalls, isEmpty);
+    });
+
+    test('статусы доставки принимаются', () async {
+      final h = await Harness.create(provider: ProviderKind.vonage);
+      final response = await h.app.handler(Request(
+        'POST',
+        Uri.parse('https://sms.agrofy.test/sms/vonage/status'),
+        body: '{"status":"delivered"}',
+      ));
+      expect(response.statusCode, 204);
+    });
+
+    test('без заголовка Authorization — 401', () async {
+      final h = await Harness.create(provider: ProviderKind.vonage);
+      final response = await h.app.handler(Request(
+        'POST',
+        Uri.parse('https://sms.agrofy.test/sms/vonage'),
+        body: '{"from":"992900000001","message_uuid":"x","text":"HELP"}',
+      ));
+      expect(response.statusCode, 401);
+    });
+
+    test('конфигурация Vonage требует все ключи', () {
+      final config = ServerConfig.fromEnvironment({
+        'AGROFY_SMS_PROVIDER': 'vonage',
+        'VONAGE_API_KEY': 'k',
+        'AGROFY_PUBLIC_URL': 'https://x.sslip.io',
+        'AGROFY_AUDIT_SALT': '0123456789abcdef0123',
+      });
+      expect(config.provider, ProviderKind.vonage);
+      expect(config.problems().single, contains('VONAGE_API_SECRET'));
+    });
+  });
+
   group('Конфигурация', () {
     test('Twilio в продакшене: нужны https и своя соль', () {
       final base = {

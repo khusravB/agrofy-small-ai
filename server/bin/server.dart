@@ -13,9 +13,11 @@ Future<void> main() async {
   }
 
   final store = await Store.open(config.dataDir);
-  final provider = config.provider == ProviderKind.twilio
-      ? TwilioProvider(config)
-      : GenericProvider(config);
+  final SmsProvider provider = switch (config.provider) {
+    ProviderKind.twilio => TwilioProvider(config),
+    ProviderKind.vonage => VonageProvider(config),
+    ProviderKind.generic => GenericProvider(config),
+  };
   final app = SmsServerApp(
     config: config,
     store: store,
