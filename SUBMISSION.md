@@ -205,6 +205,11 @@ an optional 491 MB download.
   Qwen2.5-0.5B-Instruct (Alibaba Cloud, Apache 2.0), runs on the phone to
   rephrase answers; its text is labelled in the chat and checked against the
   computed facts.
+- On the SMS server, the optional `/ВОПРОС` command sends a farmer's free
+  question with the field's NASA-based data (not the phone number) to Claude
+  Opus 5.5 through the Anthropic API, if the operator configures an API key.
+  Its answers are labelled as a language model's answer; every other SMS
+  answer comes from the rule-based engine.
 - No AI-generated images or video are used. [TODO: update if the demo uses any;
   they would need a visible watermark.]
 

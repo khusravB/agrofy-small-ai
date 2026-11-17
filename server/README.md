@@ -8,7 +8,8 @@ farmer presses Send.
 The server uses the same pure-Dart core as the app (`packages/agrofy_core`):
 the observation interpreter, evidence validator, decision engine, rotation
 advisor and offline assistant. Answers are the same rule-based answers the app
-gives; no cloud language model is called.
+gives. The only exception is the explicit `/ВОПРОС` command, which asks a
+cloud language model (see below).
 
 ## Commands
 
@@ -25,6 +26,7 @@ gives; no cloud language model is called.
 | `FIELD F1 HISTORY 3Y` | MODIS NDVI over several seasons (default 3 years, max 5) |
 | `FIELD F1 SOWING` | Daily temperature and rainfall for the last year, as context for sowing dates |
 | `FIELD 40.28,69.62 DATA 90D` | NDVI and climate for a point without registering it |
+| `/ВОПРОС текст` / `/QUESTION text` | Any question to a language model (Claude, see below), with the active field's data as context; the answer arrives as separate SMS a few seconds later |
 | `NEW` / `НОВЫЙ` | Forgets the facts of the current conversation |
 | `STOP` / `СТОП`, `START` / `СТАРТ` | Opt out and back in |
 | any other text | A question: observations ("листья желтеют, почва сухая") go through interpreter → validator → decision engine; other questions go to the offline assistant with the active field's climate |
@@ -66,6 +68,28 @@ random 96-bit token, expire after 7 days, and are served with `no-store`,
 
 Replies are at most 3 SMS segments (459 GSM-7 or 201 Cyrillic characters). The
 first sentence always carries the "подсказка, не диагноз" caveat.
+
+## Language model (`/ВОПРОС`)
+
+Everything else on the server is the rule-based "small AI" shared with the app.
+`/ВОПРОС` is the one place a cloud language model is used, and only when the
+operator sets `ANTHROPIC_API_KEY`; without it the command replies that it is
+not configured.
+
+- Model: Claude Opus 5.5 (`claude-opus-5-5`) through the Messages API, by
+  direct HTTP (there is no official Dart SDK). `AGROFY_LLM_MODEL` and
+  `AGROFY_LLM_EFFORT` (default `medium`) change it. Server-side refusal
+  fallback (`fallbacks: "default"`) is on for models that support it.
+- Sent to the API: the question and the active field's data — crop, the point
+  rounded to ~1 km, NASA POWER monthly climate, the advisor's rotations and
+  the goal. Not sent: the phone number.
+- The system prompt asks for plain text in the farmer's language, at most ~700
+  characters, grounded in the field data, without diagnoses, pesticides or
+  doses. Replies are marked "AGROFY (ИИ)" and end with a note that this is a
+  language model's answer to be checked with an agronomist.
+- Limit: `AGROFY_LLM_PER_DAY` questions per phone per day (default 10). The
+  audit log records input and output tokens per answer, without the number.
+- Plain questions without `/ВОПРОС` keep going to the built-in advisor.
 
 ## Data packages
 
@@ -164,6 +188,8 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `AGROFY_WEBHOOK_SECRET` | Generic provider: shared secret, 16+ characters |
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
+| `ANTHROPIC_API_KEY` | Claude API key for `/ВОПРОС` (unset: the command is off) |
+| `AGROFY_LLM_MODEL`, `AGROFY_LLM_EFFORT`, `AGROFY_LLM_PER_DAY` | Model (default `claude-opus-5-5`), effort (`medium`), questions per phone per day (10) |
 | `AGROFY_MAX_REPLY_SEGMENTS` | SMS segments per page (default 3) |
 | `AGROFY_MAX_PAGES` | Parts per long answer (default 8) |
 | `AGROFY_PAGES_AT_ONCE` | Parts sent at once; the rest on `ЕЩЁ` (default: all) |

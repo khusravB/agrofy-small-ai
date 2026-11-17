@@ -23,6 +23,9 @@ enum SmsCommandType {
 
   /// Следующая часть длинного ответа: ЕЩЁ (или все сразу: ВСЁ).
   more,
+
+  /// Свободный вопрос к языковой модели: /ВОПРОС текст.
+  ask,
   question,
 }
 
@@ -153,6 +156,20 @@ class SmsCommand {
 
     if (head == 'REG' || head == 'РЕГ') {
       return _parseRegister(words.skip(1).toList());
+    }
+
+    // К языковой модели — только явной командой: «/ВОПРОС …» (с косой
+    // чертой) или QUESTION; обычный текст «Вопрос про полив» остаётся
+    // встроенному советнику.
+    final slash = words.first.startsWith('/');
+    if ((slash && const {'ВОПРОС', 'QUESTION', 'Q', 'ASK', 'СПРОСИТЬ'}.contains(head)) ||
+        head == 'QUESTION') {
+      final question = words.skip(1).join(' ').trim();
+      return SmsCommand(
+        SmsCommandType.ask,
+        text: question.isEmpty ? null : question,
+        error: question.isEmpty ? 'Напишите вопрос после команды: /ВОПРОС чем подкормить хлопок?' : null,
+      );
     }
 
     if (_infoWords.contains(head)) {

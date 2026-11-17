@@ -23,6 +23,7 @@ import 'package:crypto/crypto.dart';
 
 import 'config.dart';
 import 'data_service.dart';
+import 'llm.dart';
 import 'providers.dart';
 import 'reports.dart';
 import 'store.dart';
@@ -49,7 +50,7 @@ class SmsService {
   static const String helpText =
       'AGROFY: вопрос — обычным текстом. Поле: REG F1 40.28,69.62 ХЛОПОК. '
       'Отчёт и совет: INFO F1 ВОДА. Поля: FIELDS. Спутник: FIELD F1 NDVI 90D. '
-      'ЕЩЁ — продолжение, NEW — сброс, STOP — отписка.';
+      'ИИ: /ВОПРОС текст. ЕЩЁ — дальше, STOP — отписка.';
 
   final ServerConfig config;
   final Store store;
@@ -57,6 +58,7 @@ class SmsService {
   final SmsProvider provider;
   final NasaPowerService power;
   final ReportService reports;
+  final LlmService llm;
   final DateTime Function() clock;
 
   final FarmAssistant _assistant = FarmAssistant();
@@ -72,9 +74,11 @@ class SmsService {
     required this.provider,
     NasaPowerService? power,
     ReportService? reports,
+    LlmService? llm,
     DateTime Function()? clock,
   })  : power = power ?? NasaPowerService(),
         reports = reports ?? ReportService(config, store, clock: clock),
+        llm = llm ?? LlmService(config),
         clock = clock ?? DateTime.now;
 
   /// Обезличенный номер для журнала.
@@ -146,12 +150,18 @@ class SmsService {
         suffix: ' Полностью: $url',
       );
 
-  Future<void> _audit(String phone, String type, List<String> replies) async {
+  Future<void> _audit(
+    String phone,
+    String type,
+    List<String> replies, {
+    Map<String, Object?> extra = const {},
+  }) async {
     final line = jsonEncode({
       'at': clock().toUtc().toIso8601String(),
       'phone': phoneHash(phone),
       'type': type,
       'segments_out': replies.fold<int>(0, (s, r) => s + SmsText.segments(r)),
+      ...extra,
     });
     await File('${config.dataDir}/audit.jsonl')
         .writeAsString('$line\n', mode: FileMode.append);
@@ -297,6 +307,9 @@ class SmsService {
 
       case SmsCommandType.info:
         return _info(sms, command, conversation, now);
+
+      case SmsCommandType.ask:
+        return _askLlm(sms, command.text!, conversation, now);
 
       case SmsCommandType.more:
         if (conversation.pages.isEmpty) {
@@ -692,6 +705,123 @@ class SmsService {
       .map((l) => SmsText.sentences(l).where((s) => !s.contains('вкладк')).join(' '))
       .where((l) => l.isNotEmpty)
       .toList();
+
+  /// /ВОПРОС: свободный вопрос к языковой модели (Claude) с данными поля.
+  /// Ответ приходит отдельными SMS через несколько секунд.
+  Future<SmsOutcome> _askLlm(
+    InboundSms sms,
+    String question,
+    Conversation conversation,
+    DateTime now,
+  ) async {
+    if (!llm.enabled) {
+      return SmsOutcome([
+        _fit([
+          'AGROFY: вопросы к языковой модели на сервере не настроены.',
+          'Задайте вопрос без /ВОПРОС — ответит встроенный советник.',
+        ]),
+      ]);
+    }
+    if (conversation.llmRequests.length >= config.llmPerDay) {
+      return SmsOutcome([
+        _fit([
+          'AGROFY: лимит вопросов /ВОПРОС на сегодня исчерпан (${config.llmPerDay}).',
+          'Без /ВОПРОС отвечает встроенный советник.',
+        ]),
+      ]);
+    }
+    conversation.llmRequests.add(now);
+
+    final context = _llmContext(sms.from, conversation);
+    Future<void> work() async {
+      final answer = await llm.ask(question, context);
+      final List<String> messages;
+      if (answer.ok) {
+        final pages = SmsText.paginate(
+          [
+            'AGROFY (ИИ): ${_plain(answer.text!)}',
+            'Это ответ языковой модели, не диагноз — проверьте у агронома.',
+          ],
+          maxSegments: config.maxReplySegments,
+          maxPages: config.maxPages,
+        );
+        messages = _sendNow(store.conversation(sms.from, clock()), pages);
+        await store.save();
+      } else if (answer.problem == 'refusal') {
+        messages = ['AGROFY: на этот вопрос модель не отвечает. Спросите иначе или обратитесь к агроному.'];
+      } else {
+        stderr.writeln('Claude API: ${answer.problem}');
+        messages = ['AGROFY: языковая модель сейчас недоступна. Повторите позже или спросите без /ВОПРОС.'];
+      }
+      for (final message in messages) {
+        await provider.send(sms.from, message);
+      }
+      await _audit(sms.from, 'llm', messages, extra: {
+        'input_tokens': answer.inputTokens,
+        'output_tokens': answer.outputTokens,
+        if (!answer.ok) 'problem': answer.problem,
+      });
+    }
+
+    // Ответ модели занимает секунды — вебхук не ждёт, ответ уйдёт отдельно.
+    return SmsOutcome(const [], work);
+  }
+
+  /// Ответ модели без разметки: SMS не показывает markdown.
+  static String _plain(String text) => text
+      .replaceAll(RegExp(r'\*\*|__|`|^#+\s*', multiLine: true), '')
+      .replaceAll(RegExp(r'^\s*[-*•]\s+', multiLine: true), '')
+      .replaceAll(RegExp(r'\s*\n+\s*'), ' ')
+      .trim();
+
+  /// Данные поля для модели. Без номера телефона; координаты округлены до
+  /// сотых (около 1 км).
+  String _llmContext(String phone, Conversation conversation) {
+    final record = conversation.activeField == null
+        ? null
+        : store.fields[phone]?[conversation.activeField];
+    if (record == null) {
+      return 'Данные поля: поле не зарегистрировано, климат неизвестен. Регион: Согдийская область, Таджикистан.';
+    }
+    final lines = <String>[
+      'Данные поля ${record.fieldId}: культура ${record.crop?.toLowerCase() ?? 'не указана'}; '
+          'точка ${record.latitude.toStringAsFixed(2)}, ${record.longitude.toStringAsFixed(2)} (Согдийская область, Таджикистан)'
+          '${record.goal == null ? '' : '; цель фермера — ${FarmerGoal.fromCode(record.goal!)?.label}'}.',
+    ];
+    final climateText = record.climate;
+    if (climateText != null) {
+      final c = ClimateSummary.decode(climateText);
+      String months(List<double> v, int d) => [
+            for (var i = 0; i < 12; i++) '${ClimateSummary.monthNames[i]} ${v[i].toStringAsFixed(d)}',
+          ].join(', ');
+      lines.add('Климат NASA POWER (многолетние средние, ячейка ~50 км): '
+          'осадки ${c.annualPrecipMm.round()} мм/год; средняя температура по месяцам, °C: ${months(c.tMean, 1)}; '
+          'осадки по месяцам, мм: ${months(c.precipMm, 0)}; дни с заморозками: ${months(c.frostDays, 0)}.');
+      final history = _cachedHistory(record);
+      final patterns = history == null || history.years.length < 6
+          ? null
+          : const ClimatePatternModel().train(history);
+      final cropId = _cropId(record.crop);
+      final goal = record.goal == null ? null : FarmerGoal.fromCode(record.goal!);
+      final result = _advisor.advise(
+        field: _fieldOf(record),
+        historyCropIds: cropId == null ? const [] : [cropId],
+        climate: c,
+        patterns: patterns,
+        priorities: goal?.priorities() ?? const FarmerPriorities(),
+      );
+      if (result.strategies.isNotEmpty) {
+        lines.add('Расчёт советника AGROFY (севообороты, оценка из 100, полив мм/год): '
+            '${result.strategies.map((s) => '${s.title}: ${s.sequenceLabel} — ${s.total.round()}, ${s.avgIrrigationMm.round()} мм').join('; ')}.');
+      }
+      if (patterns != null) {
+        lines.add('Типы лет ${patterns.firstYear}–${patterns.lastYear}: засушливых ${(patterns.dry.share * 100).round()}%, за последние 10 лет — ${(patterns.dry.recentShare * 100).round()}%.');
+      }
+    } else {
+      lines.add('Климат NASA для поля ещё не загружен.');
+    }
+    return lines.join('\n');
+  }
 
   /// INFO [F1 | широта,долгота] [КУЛЬТУРА] [ЦЕЛЬ]: полный отчёт по данным
   /// NASA и рекомендация, что сеять дальше, плюс код для приложения

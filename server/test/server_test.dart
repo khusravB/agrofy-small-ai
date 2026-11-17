@@ -108,6 +108,8 @@ class Harness {
     ProviderKind provider = ProviderKind.generic,
     bool reportLinks = false,
     int pagesAtOnce = 8,
+    String? anthropicKey,
+    http.Response Function(http.Request)? claude,
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -126,6 +128,8 @@ class Harness {
       maxPerHour: maxPerHour,
       reportLinks: reportLinks,
       pagesAtOnce: pagesAtOnce,
+      anthropicApiKey: anthropicKey,
+      llmPerDay: 3,
     );
     final store = await Store.open(dir.path);
     final power = FakePower();
@@ -133,6 +137,11 @@ class Harness {
     final apiCalls = <http.Request>[];
     final client = MockClient((request) async {
       apiCalls.add(request);
+      if (request.url.host == 'api.anthropic.com') {
+        return claude == null
+            ? http.Response('{"error":{"type":"overloaded_error"}}', 529)
+            : claude(request);
+      }
       return http.Response('{"message_uuid":"out"}', 202);
     });
     final SmsProvider smsProvider = switch (provider) {
@@ -149,6 +158,7 @@ class Harness {
         config: config,
         store: store,
         provider: smsProvider,
+        llm: LlmService(config, client: client),
         power: power,
         clock: clock,
         data: DataPackageService(
@@ -481,6 +491,104 @@ void main() {
       expect(reply, contains('F1 (хлопок'));
       expect(reply, contains('F2 (маш'));
       expect(reply, contains('Текущее: F2'));
+    });
+  });
+
+  group('Языковая модель: /ВОПРОС', () {
+    http.Response reply(String text, {String stop = 'end_turn'}) => http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'id': 'msg_1',
+            'type': 'message',
+            'role': 'assistant',
+            'model': 'claude-opus-5-5',
+            'content': [
+              {'type': 'thinking', 'thinking': ''},
+              {'type': 'text', 'text': text},
+            ],
+            'stop_reason': stop,
+            'usage': {'input_tokens': 900, 'output_tokens': 120},
+          })),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+
+    test('разбор команды', () {
+      final c = SmsCommand.parse('/вопрос Чем подкормить хлопок в июне?');
+      expect(c.type, SmsCommandType.ask);
+      expect(c.text, 'Чем подкормить хлопок в июне?');
+      expect(SmsCommand.parse('/QUESTION why').text, 'why');
+      expect(SmsCommand.parse('/ВОПРОС').isValid, isFalse);
+      // Без команды — обычный вопрос встроенному советнику.
+      expect(SmsCommand.parse('Вопрос про полив').type, SmsCommandType.question);
+    });
+
+    test('ответ модели приходит SMS; в запросе данные поля, но не номер', () async {
+      final h = await Harness.create(
+        anthropicKey: 'sk-test',
+        claude: (_) => reply('**Подкормка:** азот в фазе бутонизации.\n- Дробно, после полива.'),
+      );
+      await h.sms('INFO 40.28,69.62 ХЛОПОК ВОДА');
+      await h.settle();
+      final immediate = await h.sms('/ВОПРОС Чем подкормить хлопок?');
+      expect(immediate, isEmpty);
+      await h.settle();
+
+      final call = h.apiCalls.singleWhere((r) => r.url.host == 'api.anthropic.com');
+      expect(call.headers['x-api-key'], 'sk-test');
+      expect(call.headers['anthropic-version'], '2026-10-21');
+      expect(call.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+      final body = jsonDecode(call.body) as Map;
+      expect(body['model'], 'claude-opus-5-5');
+      expect(body['fallbacks'], 'default');
+      expect(body['output_config'], {'effort': 'medium'});
+      expect(body.containsKey('temperature'), isFalse);
+      final content = (body['messages'] as List).single['content'] as String;
+      expect(content, contains('Вопрос фермера: Чем подкормить хлопок?'));
+      expect(content, contains('культура хлопок'));
+      expect(content, contains('осадки'));
+      expect(content, contains('экономия воды'));
+      expect(content, contains('Расчёт советника'));
+      expect(call.body, isNot(contains('992900000001')));
+
+      final sent = h.outbox().last['text'] as String;
+      expect(sent, startsWith('AGROFY (ИИ): Подкормка: азот в фазе бутонизации. Дробно, после полива.'));
+      expect(sent, contains('ответ языковой модели'));
+      expect(sent, isNot(contains('**')));
+
+      final audit = File('${h.dir.path}/audit.jsonl').readAsLinesSync().last;
+      expect(audit, contains('"input_tokens":900'));
+      expect(audit, isNot(contains('992900000001')));
+    });
+
+    test('без ключа — понятный ответ, запрос не уходит', () async {
+      final h = await Harness.create();
+      final r = (await h.sms('/ВОПРОС что посеять?')).single;
+      expect(r, contains('не настроены'));
+      expect(h.apiCalls, isEmpty);
+    });
+
+    test('отказ модели, ошибка API и суточный лимит', () async {
+      var calls = 0;
+      final h = await Harness.create(
+        anthropicKey: 'sk-test',
+        claude: (_) {
+          calls++;
+          return calls == 1
+              ? reply('', stop: 'refusal')
+              : http.Response('{"error":{"type":"overloaded_error"}}', 529);
+        },
+      );
+      await h.sms('/ВОПРОС первый');
+      await h.settle();
+      expect(h.outbox().last['text'], contains('не отвечает'));
+      await h.sms('/ВОПРОС второй');
+      await h.settle();
+      expect(h.outbox().last['text'], contains('недоступна'));
+      await h.sms('/ВОПРОС третий');
+      await h.settle();
+      final limit = (await h.sms('/ВОПРОС четвёртый')).single;
+      expect(limit, contains('лимит'));
+      expect(calls, 3);
     });
   });
 

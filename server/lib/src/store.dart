@@ -85,6 +85,9 @@ class Conversation {
   final List<DateTime> inbound;
   final List<DateTime> dataRequests;
 
+  /// Вопросы к языковой модели (/ВОПРОС) — для суточного лимита.
+  final List<DateTime> llmRequests;
+
   Conversation({
     this.activeField,
     this.facts,
@@ -93,8 +96,10 @@ class Conversation {
     List<DateTime>? inbound,
     List<DateTime>? dataRequests,
     List<String>? pages,
+    List<DateTime>? llmRequests,
   })  : inbound = inbound ?? [],
         dataRequests = dataRequests ?? [],
+        llmRequests = llmRequests ?? [],
         pages = pages ?? [];
 
   Map<String, dynamic> toJson() => {
@@ -105,6 +110,7 @@ class Conversation {
         'inbound': inbound.map((d) => d.toIso8601String()).toList(),
         'data_requests': dataRequests.map((d) => d.toIso8601String()).toList(),
         'pages': pages,
+        'llm_requests': llmRequests.map((d) => d.toIso8601String()).toList(),
       };
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
@@ -117,6 +123,7 @@ class Conversation {
           for (final d in json['data_requests'] as List? ?? []) DateTime.parse('$d'),
         ],
         pages: [for (final p in json['pages'] as List? ?? []) '$p'],
+        llmRequests: [for (final d in json['llm_requests'] as List? ?? []) DateTime.parse('$d')],
       );
 }
 
@@ -290,6 +297,7 @@ class Store {
       }
       conversation.inbound.removeWhere((d) => now.difference(d).inDays >= 1);
       conversation.dataRequests.removeWhere((d) => now.difference(d).inDays >= 1);
+      conversation.llmRequests.removeWhere((d) => now.difference(d).inDays >= 1);
     }
     seenMessages.removeWhere((_, d) => now.difference(d).inDays >= 2);
 

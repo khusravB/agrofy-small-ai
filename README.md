@@ -119,9 +119,13 @@ itself never reads SMS.
   `УСТОЙЧИВОСТЬ`) — returns the NASA-based report and what to sow next as
   several numbered SMS (button «Отчёт и совет» prepares it). The last SMS is a
   code with the field's NASA monthly climate and the goal; «Вставить код из
-  SMS» saves it, and the advisor runs offline on the same data. No language
-  model or cloud AI API is used on the server: answers come from the same
-  rule-based engine and small models as in the app.
+  SMS» saves it, and the advisor runs offline on the same data. Answers come
+  from the same rule-based engine and small models as in the app.
+- **Any question to a language model by SMS (optional).** `/ВОПРОС текст`
+  sends the question with the field's data (not the phone number) to Claude
+  through the Anthropic API, if the server operator has set an API key; the
+  answer comes back as SMS, marked as a language model's answer. Without the
+  command, questions stay with the built-in small AI.
 - **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые
   данные» prepares `REG F5 lat,lon CROP`, `FIELD F5 NDVI 3M` or
   `FIELD F5 CLIMATE 1Y`. The server fetches MODIS NDVI (MOD13Q1, ORNL DAAC)
