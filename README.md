@@ -122,8 +122,9 @@ itself never reads SMS.
   SMS» saves it, and the advisor runs offline on the same data. Answers come
   from the same rule-based engine and small models as in the app.
 - **Any question to a language model by SMS (optional).** `/ВОПРОС текст`
-  sends the question with the field's data (not the phone number) to Claude
-  through the Anthropic API, if the server operator has set an API key; the
+  sends the question with the field's data (not the phone number) to a
+  language model: an own Qwen2.5-1.5B on the server (llama.cpp, no API fees,
+  answers checked and often declined) or Claude through the Anthropic API. The
   answer comes back as SMS, marked as a language model's answer. Without the
   command, questions stay with the built-in small AI.
 - **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые

@@ -72,24 +72,38 @@ first sentence always carries the "подсказка, не диагноз" cave
 ## Language model (`/ВОПРОС`)
 
 Everything else on the server is the rule-based "small AI" shared with the app.
-`/ВОПРОС` is the one place a cloud language model is used, and only when the
-operator sets `ANTHROPIC_API_KEY`; without it the command replies that it is
-not configured.
+`/ВОПРОС` is the one place a generative language model is used. Two options,
+chosen with `AGROFY_LLM_PROVIDER`:
 
-- Model: Claude Opus 5.5 (`claude-opus-5-5`) through the Messages API, by
-  direct HTTP (there is no official Dart SDK). `AGROFY_LLM_MODEL` and
-  `AGROFY_LLM_EFFORT` (default `medium`) change it. Server-side refusal
-  fallback (`fallbacks: "default"`) is on for models that support it.
-- Sent to the API: the question and the active field's data — crop, the point
-  rounded to ~1 km, NASA POWER monthly climate, the advisor's rotations and
-  the goal. Not sent: the phone number.
-- The system prompt asks for plain text in the farmer's language, at most ~700
-  characters, grounded in the field data, without diagnoses, pesticides or
-  doses. Replies are marked "AGROFY (ИИ)" and end with a note that this is a
-  language model's answer to be checked with an agronomist.
-- Limit: `AGROFY_LLM_PER_DAY` questions per phone per day (default 10). The
-  audit log records input and output tokens per answer, without the number.
-- Plain questions without `/ВОПРОС` keep going to the built-in advisor.
+**`local` — own model on the same server, no API fees.** llama.cpp
+(`ghcr.io/ggml-org/llama.cpp:server-b11977`) runs Qwen2.5-1.5B-Instruct (4-bit,
+~1.1 GB RAM) as the `llm` service of `deploy/docker-compose.yml`, started only
+with `docker compose --profile llm up -d`. It is reachable only by the SMS
+server. Because a 1.5B model is weak, its answer is checked before sending
+(the same guard as in the app, stricter for SMS): no Chinese or other foreign
+script, at least 97% Cyrillic, no numbers or crops that are not in the field
+data, enough overlap with the question and data; repeated sentences are
+removed and the answer is cut to about two SMS. If the check fails the farmer
+gets "на этот вопрос надёжно ответить не могу" and a pointer to `INFO`.
+Measured on 2 CPU cores: 10–20 s per answer. Tested on three questions about
+irrigation, crop choice and frost: the 1.5B model passed the check on none of
+them, Qwen2.5-3B on one (and that answer was wrong), so expect mostly the
+"cannot answer reliably" reply. `AGROFY_LLM_HF` picks another GGUF model.
+
+**`anthropic` (default) — Claude through the API.** Claude Opus 5.5
+(`claude-opus-5-5`) via the Messages API, direct HTTP (no Dart SDK);
+`AGROFY_LLM_MODEL` (e.g. the much cheaper `claude-haiku-5-5`) and
+`AGROFY_LLM_EFFORT` (default `medium`) change it; server-side refusal
+fallback is on for models that support it. Off unless `ANTHROPIC_API_KEY` is
+set.
+
+For both: the request carries the question and the active field's data —
+crop, the point rounded to ~1 km, NASA POWER climate month by month, the
+advisor's rotations and the goal — never the phone number. Answers are marked
+"AGROFY (ИИ)" and end with a note to check with an agronomist. Limit:
+`AGROFY_LLM_PER_DAY` per phone (default 10); the audit log records the model
+and tokens. Plain questions without `/ВОПРОС` keep going to the built-in
+advisor.
 
 ## Data packages
 
@@ -188,7 +202,9 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `AGROFY_WEBHOOK_SECRET` | Generic provider: shared secret, 16+ characters |
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
-| `ANTHROPIC_API_KEY` | Claude API key for `/ВОПРОС` (unset: the command is off) |
+| `AGROFY_LLM_PROVIDER` | `local` (own model, `--profile llm`) or `anthropic` (default) |
+| `AGROFY_LLM_URL`, `AGROFY_LLM_HF` | Own model address (default `http://llm:8080`) and GGUF model (default `Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`) |
+| `ANTHROPIC_API_KEY` | Claude API key for `/ВОПРОС` with `anthropic` (unset: the command is off) |
 | `AGROFY_LLM_MODEL`, `AGROFY_LLM_EFFORT`, `AGROFY_LLM_PER_DAY` | Model (default `claude-opus-5-5`), effort (`medium`), questions per phone per day (10) |
 | `AGROFY_MAX_REPLY_SEGMENTS` | SMS segments per page (default 3) |
 | `AGROFY_MAX_PAGES` | Parts per long answer (default 8) |

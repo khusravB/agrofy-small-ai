@@ -2,6 +2,9 @@ import 'dart:io';
 
 enum ProviderKind { twilio, vonage, generic }
 
+/// Языковая модель для /ВОПРОС.
+enum LlmProvider { anthropic, local }
+
 /// Настройки сервера из переменных окружения. Секреты в код не попадают.
 class ServerConfig {
   final int port;
@@ -43,6 +46,13 @@ class ServerConfig {
   /// Сколько страниц (SMS) может быть у одного длинного ответа.
   final int maxPages;
 
+  /// Какая модель отвечает на /ВОПРОС: своя (llama.cpp на этом же
+  /// сервере) или Claude по API.
+  final LlmProvider llmProvider;
+
+  /// Адрес своей модели (OpenAI-совместимый llama-server).
+  final String llmUrl;
+
   /// Ключ Claude API для команды /ВОПРОС; без него команда выключена.
   final String? anthropicApiKey;
   final String llmModel;
@@ -80,6 +90,8 @@ class ServerConfig {
     this.maxPages = 8,
     this.pagesAtOnce = 8,
     this.anthropicApiKey,
+    this.llmProvider = LlmProvider.anthropic,
+    this.llmUrl = 'http://llm:8080',
     this.llmModel = 'claude-opus-5-5',
     this.llmEffort = 'medium',
     this.llmPerDay = 10,
@@ -120,6 +132,11 @@ class ServerConfig {
       maxPages: number('AGROFY_MAX_PAGES', 8),
       pagesAtOnce: number('AGROFY_PAGES_AT_ONCE', number('AGROFY_MAX_PAGES', 8)),
       anthropicApiKey: e['ANTHROPIC_API_KEY'],
+      llmProvider: switch (e['AGROFY_LLM_PROVIDER']) {
+        'local' => LlmProvider.local,
+        _ => LlmProvider.anthropic,
+      },
+      llmUrl: (e['AGROFY_LLM_URL'] ?? 'http://llm:8080').replaceAll(RegExp(r'/+$'), ''),
       llmModel: e['AGROFY_LLM_MODEL'] ?? 'claude-opus-5-5',
       llmEffort: e['AGROFY_LLM_EFFORT'] ?? 'medium',
       llmPerDay: number('AGROFY_LLM_PER_DAY', 10),

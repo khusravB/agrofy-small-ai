@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:agrofy_core/ai/farm_assistant.dart';
+import 'package:agrofy_core/ai/llm_grounding.dart';
 import 'package:agrofy_core/ai/climate_pattern_model.dart';
 import 'package:agrofy_core/data/crop_catalog.dart';
 import 'package:agrofy_core/models/climate_history.dart';
@@ -732,14 +733,31 @@ class SmsService {
     }
     conversation.llmRequests.add(now);
 
-    final context = _llmContext(sms.from, conversation);
+    final local = config.llmProvider == LlmProvider.local;
+    // Справка встроенного советника: точные данные для модели и запасной
+    // ответ, если маленькая модель ответит ненадёжно.
+    final reference = _smsLines(_builtInAnswer(sms.from, question, conversation)).join(' ');
+    final context = [
+      _llmContext(sms.from, conversation),
+      if (local && reference.isNotEmpty) 'Справка AGROFY по вопросу (точные данные): $reference',
+    ].join('\n');
     Future<void> work() async {
       final answer = await llm.ask(question, context);
       final List<String> messages;
-      if (answer.ok) {
+      var text = answer.ok ? _dedupe(_plain(answer.text!)) : null;
+      if (text != null && local) {
+        // Маленькая модель многословна: целыми предложениями до ~2 SMS.
+        text = SmsText.fit([text], maxSegments: 2 * config.maxReplySegments);
+        text = text.replaceFirst(RegExp(r'^(Ответ|Результат)\s*:\s*', caseSensitive: false), '');
+      }
+      // Своя маленькая модель может ошибиться: ответ проходит ту же
+      // проверку, что и в приложении (язык, числа и культуры только из
+      // данных). Иначе — ответ встроенного советника.
+      final trusted = text != null && (!local || _localAcceptable(text, context, question));
+      if (trusted) {
         final pages = SmsText.paginate(
           [
-            'AGROFY (ИИ): ${_plain(answer.text!)}',
+            'AGROFY (ИИ): $text',
             'Это ответ языковой модели, не диагноз — проверьте у агронома.',
           ],
           maxSegments: config.maxReplySegments,
@@ -747,6 +765,16 @@ class SmsService {
         );
         messages = _sendNow(store.conversation(sms.from, clock()), pages);
         await store.save();
+      } else if (text != null) {
+        // Ответ модели не прошёл проверку. Справку встроенного советника не
+        // подставляем: на свободный вопрос она часто не по теме.
+        final id = store.conversation(sms.from, clock()).activeField ?? 'F1';
+        messages = [
+          _fit([
+            'AGROFY: на этот вопрос надёжно ответить не могу.',
+            'Полив, сроки посева и климат поля — в INFO $id; про болезни и подкормки — у агронома.',
+          ]),
+        ];
       } else if (answer.problem == 'refusal') {
         messages = ['AGROFY: на этот вопрос модель не отвечает. Спросите иначе или обратитесь к агроному.'];
       } else {
@@ -757,14 +785,70 @@ class SmsService {
         await provider.send(sms.from, message);
       }
       await _audit(sms.from, 'llm', messages, extra: {
+        'model': llm.modelName,
         'input_tokens': answer.inputTokens,
         'output_tokens': answer.outputTokens,
         if (!answer.ok) 'problem': answer.problem,
+        if (answer.ok && !trusted) 'rejected': true,
       });
     }
 
     // Ответ модели занимает секунды — вебхук не ждёт, ответ уйдёт отдельно.
     return SmsOutcome(const [], work);
+  }
+
+  /// Ответ встроенного советника на вопрос (как без /ВОПРОС, но без
+  /// записи в диалог).
+  String _builtInAnswer(String phone, String question, Conversation conversation) {
+    final record = conversation.activeField == null
+        ? null
+        : store.fields[phone]?[conversation.activeField];
+    final climate = record?.climate == null ? null : ClimateSummary.decode(record!.climate!);
+    final history = _cachedHistory(record);
+    final patterns =
+        history == null || history.years.length < 6 ? null : const ClimatePatternModel().train(history);
+    final cropId = _cropId(record?.crop);
+    final goal = record?.goal == null ? null : FarmerGoal.fromCode(record!.goal!);
+    final field = _fieldOf(record);
+    final result = record == null
+        ? null
+        : _advisor.advise(
+            field: field,
+            historyCropIds: cropId == null ? const [] : [cropId],
+            climate: climate,
+            patterns: patterns,
+            priorities: goal?.priorities() ?? const FarmerPriorities(),
+          );
+    return _assistant
+        .answer(
+          question,
+          AssistantContext(field: record == null ? null : field, result: result, climate: climate, patterns: patterns),
+        )
+        .text;
+  }
+
+  /// Проверка ответа своей модели для SMS — строже, чем в приложении:
+  /// там рядом всегда виден точный ответ, а в SMS ответ модели — единственный.
+  static bool _localAcceptable(String text, String facts, String question) {
+    final clean = _withoutListNumbers(text);
+    final foreignScript = RegExp(r'[\u3040-\u9FFF\uAC00-\uD7AF]').hasMatch(text);
+    return !foreignScript &&
+        LlmGrounding.cyrillicShare(clean) >= 0.97 &&
+        LlmGrounding.isAcceptable(clean, facts: facts, question: question);
+  }
+
+  /// «1. … 2. …» — номера пунктов, а не данные: не считаются выдуманными
+  /// числами.
+  static String _withoutListNumbers(String text) =>
+      text.replaceAll(RegExp(r'(^|\s)\d{1,2}[.)](?=\s)'), ' ');
+
+  /// Маленькие модели повторяют предложения — повтор убирается.
+  static String _dedupe(String text) {
+    final seen = <String>{};
+    return [
+      for (final sentence in SmsText.sentences(text))
+        if (seen.add(sentence.toLowerCase().replaceAll(RegExp(r'[^а-яёa-z0-9]'), ''))) sentence,
+    ].join(' ');
   }
 
   /// Ответ модели без разметки: SMS не показывает markdown.
@@ -791,12 +875,15 @@ class SmsService {
     final climateText = record.climate;
     if (climateText != null) {
       final c = ClimateSummary.decode(climateText);
-      String months(List<double> v, int d) => [
-            for (var i = 0; i < 12; i++) '${ClimateSummary.monthNames[i]} ${v[i].toStringAsFixed(d)}',
-          ].join(', ');
-      lines.add('Климат NASA POWER (многолетние средние, ячейка ~50 км): '
-          'осадки ${c.annualPrecipMm.round()} мм/год; средняя температура по месяцам, °C: ${months(c.tMean, 1)}; '
-          'осадки по месяцам, мм: ${months(c.precipMm, 0)}; дни с заморозками: ${months(c.frostDays, 0)}.');
+      const fullMonths = [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+      ];
+      lines.add('Климат NASA POWER (многолетние средние, ячейка ~50 км), осадки за год ${c.annualPrecipMm.round()} мм. По месяцам:');
+      for (var i = 0; i < 12; i++) {
+        lines.add('${fullMonths[i]}: средняя температура ${c.tMean[i].toStringAsFixed(1)} °C, '
+            'осадки ${c.precipMm[i].round()} мм, дней с заморозками ${c.frostDays[i].round()}.');
+      }
       final history = _cachedHistory(record);
       final patterns = history == null || history.years.length < 6
           ? null

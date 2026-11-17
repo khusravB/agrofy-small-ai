@@ -26,6 +26,34 @@ services:
       - agrofy
     restart: unless-stopped
 
+  # Своя языковая модель для /ВОПРОС (необязательно):
+  #   docker compose --profile llm up -d
+  # и в .env: AGROFY_LLM_PROVIDER=local. Модель (~1 ГБ) скачивается один раз
+  # с Hugging Face в том llm-models. Порт наружу не открыт: модель видна
+  # только SMS-серверу.
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-b11977
+    profiles: ["llm"]
+    command:
+      - -hf
+      - ${AGROFY_LLM_HF:-Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - -c
+      - "4096"
+      - --threads
+      - "2"
+      - --parallel
+      - "1"
+    environment:
+      LLAMA_CACHE: /models
+    volumes:
+      - llm-models:/models
+    restart: unless-stopped
+
 volumes:
   agrofy-data:
   caddy-data:
+  llm-models:

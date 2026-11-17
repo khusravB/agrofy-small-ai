@@ -206,8 +206,10 @@ an optional 491 MB download.
   rephrase answers; its text is labelled in the chat and checked against the
   computed facts.
 - On the SMS server, the optional `/ВОПРОС` command sends a farmer's free
-  question with the field's NASA-based data (not the phone number) to Claude
-  Opus 5.5 through the Anthropic API, if the operator configures an API key.
+  question with the field's NASA-based data (not the phone number) to a
+  language model: Qwen2.5-1.5B-Instruct (Apache 2.0) run on the server with
+  llama.cpp, whose answers are checked and declined when unreliable, or Claude
+  through the Anthropic API if the operator configures a key.
   Its answers are labelled as a language model's answer; every other SMS
   answer comes from the rule-based engine.
 - No AI-generated images or video are used. [TODO: update if the demo uses any;

@@ -110,6 +110,7 @@ class Harness {
     int pagesAtOnce = 8,
     String? anthropicKey,
     http.Response Function(http.Request)? claude,
+    http.Response Function(http.Request)? localLlm,
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -129,6 +130,7 @@ class Harness {
       reportLinks: reportLinks,
       pagesAtOnce: pagesAtOnce,
       anthropicApiKey: anthropicKey,
+      llmProvider: localLlm == null ? LlmProvider.anthropic : LlmProvider.local,
       llmPerDay: 3,
     );
     final store = await Store.open(dir.path);
@@ -137,6 +139,9 @@ class Harness {
     final apiCalls = <http.Request>[];
     final client = MockClient((request) async {
       apiCalls.add(request);
+      if (request.url.host == 'llm' && localLlm != null) {
+        return localLlm(request);
+      }
       if (request.url.host == 'api.anthropic.com') {
         return claude == null
             ? http.Response('{"error":{"type":"overloaded_error"}}', 529)
@@ -558,6 +563,45 @@ void main() {
       final audit = File('${h.dir.path}/audit.jsonl').readAsLinesSync().last;
       expect(audit, contains('"input_tokens":900'));
       expect(audit, isNot(contains('992900000001')));
+    });
+
+    test('своя модель (llama.cpp): проверенный ответ уходит, ненадёжный — нет', () async {
+      String answer = '';
+      final h = await Harness.create(
+        localLlm: (request) {
+          expect(request.url.toString(), 'http://llm:8080/v1/chat/completions');
+          final body = jsonDecode(request.body) as Map;
+          expect((body['messages'] as List).first['role'], 'system');
+          expect((body['messages'] as List).last['content'], contains('Июль: средняя температура'));
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({
+              'choices': [
+                {'message': {'role': 'assistant', 'content': answer}},
+              ],
+              'usage': {'prompt_tokens': 800, 'completion_tokens': 60},
+            })),
+            200,
+          );
+        },
+      );
+      await h.sms('INFO 40.28,69.62 ХЛОПОК ВОДА');
+      await h.settle();
+
+      answer = 'Ответ: в июле осадков почти нет, поэтому хлопок поливают регулярно. '
+          'Точный график уточните у агронома. Точный график уточните у агронома.';
+      await h.sms('/ВОПРОС Нужно ли поливать хлопок в июле?');
+      await h.settle();
+      final good = h.outbox().last['text'] as String;
+      expect(good, startsWith('AGROFY (ИИ): в июле осадков почти нет'));
+      expect('Точный график'.allMatches(good).length, 1);
+
+      answer = 'Поливать 17 раз в month, это 水量 good.';
+      await h.sms('/ВОПРОС А сколько раз?');
+      await h.settle();
+      final bad = h.outbox().last['text'] as String;
+      expect(bad, contains('надёжно ответить не могу'));
+      expect(bad, contains('INFO F1'));
+      expect(bad, isNot(contains('17')));
     });
 
     test('без ключа — понятный ответ, запрос не уходит', () async {
