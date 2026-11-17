@@ -72,18 +72,21 @@ first sentence always carries the "подсказка, не диагноз" cave
 ## Language model (`/ВОПРОС`)
 
 Everything else on the server is the rule-based "small AI" shared with the app.
-`/ВОПРОС` is the one place a generative language model is used. Two options,
+`/ВОПРОС` is the one place a generative language model is used. Three options,
 chosen with `AGROFY_LLM_PROVIDER`:
 
-**`anthropic` (default) — Claude Haiku 5.5 through the API.** Model
-`claude-haiku-5-5` via the Messages API, direct HTTP (there is no official
-Dart SDK). At $0.10 per million input and $0.50 per million output tokens, a
-question with the field's data (~1,000–1,500 tokens in, ~300 out) costs about
-$0.0003, roughly 3,000 questions per dollar. `AGROFY_LLM_MODEL` can switch to
-a stronger model (e.g. `claude-opus-5-5`, for which server-side refusal
-fallback is turned on automatically; Haiku 5.5 has none, so a refusal gets a
-short reply). `AGROFY_LLM_EFFORT` defaults to `medium`. Off unless
-`ANTHROPIC_API_KEY` is set.
+**`openai` (default) — GPT-5.6 Luna through the OpenAI Responses API.**
+`POST https://api.openai.com/v1/responses`, model `gpt-5.6-luna`, reasoning
+effort `low`, `store: false` (questions are not kept by OpenAI). At $0.20 per
+million input and $1.20 per million output tokens a question with the field's
+data costs about $0.0007. `OPENAI_API_KEY` turns it on; `AGROFY_OPENAI_MODEL`
+and `AGROFY_OPENAI_EFFORT` change the model and effort.
+
+**`anthropic` — Claude Haiku 5.5 through the Anthropic Messages API.** Model
+`claude-haiku-5-5` (about $0.0003 per question, $0.10 / $0.50 per million
+tokens), direct HTTP (no Dart SDK). `AGROFY_LLM_MODEL` can switch to a stronger
+model (e.g. `claude-opus-5-5`, for which server-side refusal fallback is turned
+on automatically). Needs `ANTHROPIC_API_KEY`.
 
 **`local` — own model on the same server, no API fees.** llama.cpp
 (`ghcr.io/ggml-org/llama.cpp:server-b11977`) runs Qwen2.5-1.5B-Instruct (4-bit,
@@ -201,7 +204,8 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `AGROFY_WEBHOOK_SECRET` | Generic provider: shared secret, 16+ characters |
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
-| `AGROFY_LLM_PROVIDER` | `local` (own model, `--profile llm`) or `anthropic` (default) |
+| `AGROFY_LLM_PROVIDER` | `openai` (default, GPT-5.6 Luna), `anthropic` (Claude Haiku 5.5) or `local` (own model, `--profile llm`) |
+| `OPENAI_API_KEY`, `AGROFY_OPENAI_MODEL`, `AGROFY_OPENAI_EFFORT` | OpenAI key (unset: `/ВОПРОС` is off), model (`gpt-5.6-luna`), reasoning effort (`low`) |
 | `AGROFY_LLM_URL`, `AGROFY_LLM_HF` | Own model address (default `http://llm:8080`) and GGUF model (default `Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`) |
 | `ANTHROPIC_API_KEY` | Claude API key for `/ВОПРОС` with `anthropic` (unset: the command is off) |
 | `AGROFY_LLM_MODEL`, `AGROFY_LLM_EFFORT`, `AGROFY_LLM_PER_DAY` | Model (default `claude-opus-5-5`), effort (`medium`), questions per phone per day (10) |

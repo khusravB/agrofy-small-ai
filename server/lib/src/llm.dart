@@ -24,8 +24,9 @@ class LlmAnswer {
   bool get ok => text != null;
 }
 
-/// Свободные вопросы фермера по команде /ВОПРОС: своя модель (llama.cpp на
-/// сервере AGROFY) или Claude через Messages API (для Dart нет официального
+/// Свободные вопросы фермера по команде /ВОПРОС: GPT-5.6 Luna через OpenAI
+/// Responses API (по умолчанию), Claude через Messages API или своя модель
+/// (llama.cpp на сервере AGROFY). Claude — через Messages API (для Dart нет официального
 /// SDK, поэтому прямой HTTP-запрос). Номер
 /// телефона в запрос не попадает: только вопрос и данные поля.
 class LlmService {
@@ -63,12 +64,79 @@ class LlmService {
 
   LlmService(this.config, {http.Client? client}) : client = client ?? http.Client();
 
-  bool get enabled => config.llmProvider == LlmProvider.local ||
-      (config.anthropicApiKey != null && config.anthropicApiKey!.isNotEmpty);
+  static bool _has(String? key) => key != null && key.isNotEmpty;
+
+  bool get enabled => switch (config.llmProvider) {
+        LlmProvider.local => true,
+        LlmProvider.openai => _has(config.openaiApiKey),
+        LlmProvider.anthropic => _has(config.anthropicApiKey),
+      };
 
   /// Подпись модели в журнале.
-  String get modelName =>
-      config.llmProvider == LlmProvider.local ? 'local' : config.llmModel;
+  String get modelName => switch (config.llmProvider) {
+        LlmProvider.local => 'local',
+        LlmProvider.openai => config.openaiModel,
+        LlmProvider.anthropic => config.llmModel,
+      };
+
+  static const String openaiEndpoint = 'https://api.openai.com/v1/responses';
+
+  /// OpenAI Responses API. store: false — вопросы фермеров не хранятся у
+  /// OpenAI. max_output_tokens включает токены рассуждения, поэтому с запасом.
+  Map<String, dynamic> openaiBody(String question, String context) => {
+        'model': config.openaiModel,
+        'instructions': systemPrompt,
+        'input': '$context\n\nВопрос фермера: $question',
+        'reasoning': {'effort': config.openaiEffort},
+        'max_output_tokens': 4000,
+        'store': false,
+      };
+
+  Future<LlmAnswer> _askOpenAi(String question, String context) async {
+    http.Response response;
+    try {
+      response = await client
+          .post(
+            Uri.parse(openaiEndpoint),
+            headers: {
+              'content-type': 'application/json',
+              'authorization': 'Bearer ${config.openaiApiKey}',
+            },
+            body: jsonEncode(openaiBody(question, context)),
+          )
+          .timeout(const Duration(seconds: 120));
+    } on Object catch (e) {
+      return LlmAnswer.failed('openai network: $e');
+    }
+    if (response.statusCode != 200) {
+      return LlmAnswer.failed('openai http ${response.statusCode}');
+    }
+    final json = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    final texts = <String>[];
+    var refused = false;
+    for (final item in json['output'] as List? ?? const []) {
+      if (item is! Map || item['type'] != 'message') {
+        continue;
+      }
+      for (final part in item['content'] as List? ?? const []) {
+        if (part is Map && part['type'] == 'output_text') {
+          texts.add('${part['text']}');
+        } else if (part is Map && part['type'] == 'refusal') {
+          refused = true;
+        }
+      }
+    }
+    final text = texts.join('\n').trim();
+    if (text.isEmpty) {
+      return LlmAnswer.failed(refused ? 'refusal' : 'empty (${json['status']})');
+    }
+    final usage = json['usage'] as Map<String, dynamic>? ?? const {};
+    return LlmAnswer.ok(
+      text,
+      inputTokens: (usage['input_tokens'] as num?)?.toInt() ?? 0,
+      outputTokens: (usage['output_tokens'] as num?)?.toInt() ?? 0,
+    );
+  }
 
   Map<String, dynamic> requestBody(String question, String context) => {
         'model': config.llmModel,
@@ -139,6 +207,9 @@ class LlmService {
     }
     if (config.llmProvider == LlmProvider.local) {
       return _askLocal(question, context);
+    }
+    if (config.llmProvider == LlmProvider.openai) {
+      return _askOpenAi(question, context);
     }
     http.Response response;
     try {

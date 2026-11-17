@@ -112,6 +112,8 @@ class Harness {
     http.Response Function(http.Request)? claude,
     http.Response Function(http.Request)? localLlm,
     String llmModel = 'claude-haiku-5-5',
+    String? openaiKey,
+    http.Response Function(http.Request)? openai,
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -131,7 +133,12 @@ class Harness {
       reportLinks: reportLinks,
       pagesAtOnce: pagesAtOnce,
       anthropicApiKey: anthropicKey,
-      llmProvider: localLlm == null ? LlmProvider.anthropic : LlmProvider.local,
+      llmProvider: localLlm != null
+          ? LlmProvider.local
+          : anthropicKey != null
+              ? LlmProvider.anthropic
+              : LlmProvider.openai,
+      openaiApiKey: openaiKey,
       llmModel: llmModel,
       llmPerDay: 3,
     );
@@ -141,6 +148,9 @@ class Harness {
     final apiCalls = <http.Request>[];
     final client = MockClient((request) async {
       apiCalls.add(request);
+      if (request.url.host == 'api.openai.com') {
+        return openai == null ? http.Response('{"error":{}}', 500) : openai(request);
+      }
       if (request.url.host == 'llm' && localLlm != null) {
         return localLlm(request);
       }
@@ -620,6 +630,75 @@ void main() {
       final body = jsonDecode(call.body) as Map;
       expect(body['model'], 'claude-opus-5-5');
       expect(body['fallbacks'], 'default');
+    });
+
+    http.Response luna(List<Map<String, Object?>> content, {String status = 'completed'}) =>
+        http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'id': 'resp_1',
+            'object': 'response',
+            'status': status,
+            'model': 'gpt-5.6-luna',
+            'output': [
+              {'type': 'reasoning', 'id': 'rs_1', 'summary': []},
+              {'type': 'message', 'role': 'assistant', 'status': status, 'content': content},
+            ],
+            'usage': {
+              'input_tokens': 1100,
+              'output_tokens': 240,
+              'output_tokens_details': {'reasoning_tokens': 120},
+            },
+          })),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+
+    test('GPT-5.6 Luna по умолчанию: Responses API, store false, без номера', () async {
+      final h = await Harness.create(
+        openaiKey: 'sk-openai-test',
+        openai: (_) => luna([
+          {'type': 'output_text', 'text': 'В июле хлопок поливают каждые 7–10 дней.', 'annotations': []},
+        ]),
+      );
+      await h.sms('INFO 40.28,69.62 ХЛОПОК ВОДА');
+      await h.settle();
+      await h.sms('/ВОПРОС как часто поливать хлопок в июле?');
+      await h.settle();
+
+      final call = h.apiCalls.singleWhere((r) => r.url.host == 'api.openai.com');
+      expect(call.url.path, '/v1/responses');
+      expect(call.headers['authorization'], 'Bearer sk-openai-test');
+      final body = jsonDecode(call.body) as Map;
+      expect(body['model'], 'gpt-5.6-luna');
+      expect(body['store'], false);
+      expect(body['reasoning'], {'effort': 'low'});
+      expect(body['instructions'], contains('агрономический помощник'));
+      expect(body['input'], contains('Июль: средняя температура'));
+      expect(body['input'], contains('Вопрос фермера: как часто поливать хлопок в июле?'));
+      expect(call.body, isNot(contains('992900000001')));
+
+      expect(h.outbox().last['text'], startsWith('AGROFY (ИИ): В июле хлопок поливают каждые 7–10 дней.'));
+      final audit = File('${h.dir.path}/audit.jsonl').readAsLinesSync().last;
+      expect(audit, contains('"model":"gpt-5.6-luna"'));
+      expect(audit, contains('"output_tokens":240'));
+    });
+
+    test('Luna: отказ и ошибка API — короткий ответ', () async {
+      var n = 0;
+      final h = await Harness.create(
+        openaiKey: 'sk-openai-test',
+        openai: (_) => ++n == 1
+            ? luna([
+                {'type': 'refusal', 'refusal': 'I can’t help with that.'},
+              ])
+            : http.Response('{"error":{"type":"server_error"}}', 500),
+      );
+      await h.sms('/ВОПРОС первый');
+      await h.settle();
+      expect(h.outbox().last['text'], contains('не отвечает'));
+      await h.sms('/ВОПРОС второй');
+      await h.settle();
+      expect(h.outbox().last['text'], contains('недоступна'));
     });
 
     test('без ключа — понятный ответ, запрос не уходит', () async {

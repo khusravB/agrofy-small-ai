@@ -3,7 +3,7 @@ import 'dart:io';
 enum ProviderKind { twilio, vonage, generic }
 
 /// Языковая модель для /ВОПРОС.
-enum LlmProvider { anthropic, local }
+enum LlmProvider { openai, anthropic, local }
 
 /// Настройки сервера из переменных окружения. Секреты в код не попадают.
 class ServerConfig {
@@ -53,6 +53,11 @@ class ServerConfig {
   /// Адрес своей модели (OpenAI-совместимый llama-server).
   final String llmUrl;
 
+  /// Ключ OpenAI для /ВОПРОС (модель GPT-5.6 Luna по умолчанию).
+  final String? openaiApiKey;
+  final String openaiModel;
+  final String openaiEffort;
+
   /// Ключ Claude API для команды /ВОПРОС; без него команда выключена.
   final String? anthropicApiKey;
   final String llmModel;
@@ -90,7 +95,10 @@ class ServerConfig {
     this.maxPages = 8,
     this.pagesAtOnce = 8,
     this.anthropicApiKey,
-    this.llmProvider = LlmProvider.anthropic,
+    this.llmProvider = LlmProvider.openai,
+    this.openaiApiKey,
+    this.openaiModel = 'gpt-5.6-luna',
+    this.openaiEffort = 'low',
     this.llmUrl = 'http://llm:8080',
     this.llmModel = 'claude-haiku-5-5',
     this.llmEffort = 'medium',
@@ -134,8 +142,12 @@ class ServerConfig {
       anthropicApiKey: e['ANTHROPIC_API_KEY'],
       llmProvider: switch (e['AGROFY_LLM_PROVIDER']) {
         'local' => LlmProvider.local,
-        _ => LlmProvider.anthropic,
+        'anthropic' => LlmProvider.anthropic,
+        _ => LlmProvider.openai,
       },
+      openaiApiKey: e['OPENAI_API_KEY'],
+      openaiModel: e['AGROFY_OPENAI_MODEL'] ?? 'gpt-5.6-luna',
+      openaiEffort: e['AGROFY_OPENAI_EFFORT'] ?? 'low',
       llmUrl: (e['AGROFY_LLM_URL'] ?? 'http://llm:8080').replaceAll(RegExp(r'/+$'), ''),
       llmModel: e['AGROFY_LLM_MODEL'] ?? 'claude-haiku-5-5',
       llmEffort: e['AGROFY_LLM_EFFORT'] ?? 'medium',

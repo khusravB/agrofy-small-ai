@@ -778,7 +778,7 @@ class SmsService {
       } else if (answer.problem == 'refusal') {
         messages = ['AGROFY: на этот вопрос модель не отвечает. Спросите иначе или обратитесь к агроному.'];
       } else {
-        stderr.writeln('Claude API: ${answer.problem}');
+        stderr.writeln('LLM ${llm.modelName}: ${answer.problem}');
         messages = ['AGROFY: языковая модель сейчас недоступна. Повторите позже или спросите без /ВОПРОС.'];
       }
       for (final message in messages) {
