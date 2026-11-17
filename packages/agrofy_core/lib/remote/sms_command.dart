@@ -2,6 +2,10 @@
 /// (входящие SMS) и приложением (подготовка текста перед отправкой).
 library;
 
+import 'field_code.dart';
+
+export 'field_code.dart' show FarmerGoal;
+
 enum SmsCommandType {
   help,
   stop,
@@ -84,6 +88,9 @@ class SmsCommand {
   /// Культура при регистрации или текст вопроса.
   final String? text;
 
+  /// Цель фермера (INFO … ВОДА).
+  final FarmerGoal? goal;
+
   /// Ошибка разбора: команда распознана, но параметры неверны.
   final String? error;
 
@@ -94,6 +101,7 @@ class SmsCommand {
     this.kind,
     this.days,
     this.text,
+    this.goal,
     this.error,
   });
 
@@ -128,7 +136,11 @@ class SmsCommand {
   static SmsCommand parse(String raw) {
     final text = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
     final words = text.split(' ');
-    final head = words.first.toUpperCase().replaceAll(RegExp(r'[.!?,]+$'), '');
+    // «/INFO» — как в мессенджерах: косая черта перед командой допустима.
+    final head = words.first
+        .toUpperCase()
+        .replaceFirst(RegExp(r'^/'), '')
+        .replaceAll(RegExp(r'[.!?,]+$'), '');
 
     if (words.length == 1 && _keywords.containsKey(head)) {
       return SmsCommand(_keywords[head]!);
@@ -143,18 +155,8 @@ class SmsCommand {
       return _parseRegister(words.skip(1).toList());
     }
 
-    if (_infoWords.contains(head) && words.length <= 2) {
-      if (words.length == 1) {
-        return const SmsCommand(SmsCommandType.info);
-      }
-      final id = words[1].toUpperCase();
-      if (!_fieldId.hasMatch(id)) {
-        return const SmsCommand(
-          SmsCommandType.info,
-          error: 'Формат: INFO F1 (или просто INFO — для текущего поля).',
-        );
-      }
-      return SmsCommand(SmsCommandType.info, fieldId: id);
+    if (_infoWords.contains(head)) {
+      return _parseInfo(words.skip(1).toList());
     }
 
     if (head == 'FIELD' || head == 'ПОЛЕ') {
@@ -162,6 +164,57 @@ class SmsCommand {
     }
 
     return SmsCommand(SmsCommandType.question, text: text);
+  }
+
+  /// INFO [F1 | широта,долгота] [КУЛЬТУРА] [ЦЕЛЬ]:
+  /// `/INFO 40.28,69.62 ХЛОПОК ВОДА`, `INFO F1 ДОХОД`, `INFO`.
+  static SmsCommand _parseInfo(List<String> args) {
+    const format = 'Формат: INFO 40.28,69.62 ХЛОПОК ВОДА '
+        '(цель: ВОДА, ПОЧВА, ДОХОД или УСТОЙЧИВОСТЬ) или INFO F1.';
+    String? fieldId;
+    GeoPoint? point;
+    var rest = args;
+    if (rest.isNotEmpty) {
+      final first = rest.first;
+      final upper = first.toUpperCase();
+      if (_fieldId.hasMatch(upper) && FarmerGoal.fromWord(upper) == null) {
+        fieldId = upper;
+        rest = rest.skip(1).toList();
+        // INFO F5 40.28,69.62 … — поле с номером из приложения.
+        if (rest.isNotEmpty && RegExp(r'^-?\d').hasMatch(rest.first)) {
+          point = _point(rest.first);
+          if (point == null) {
+            return const SmsCommand(SmsCommandType.info, error: format);
+          }
+          rest = rest.skip(1).toList();
+        }
+      } else if (RegExp(r'^-?\d').hasMatch(first)) {
+        point = _point(first);
+        if (point == null) {
+          return const SmsCommand(SmsCommandType.info, error: format);
+        }
+        rest = rest.skip(1).toList();
+      }
+    }
+    FarmerGoal? goal;
+    if (rest.isNotEmpty) {
+      goal = FarmerGoal.fromWord(rest.last);
+      if (goal != null) {
+        rest = rest.sublist(0, rest.length - 1);
+      }
+    }
+    // «ЭКОНОМИЯ ВОДЫ» — две слова одной цели.
+    if (goal == FarmerGoal.water && rest.isNotEmpty && FarmerGoal.fromWord(rest.last) == FarmerGoal.water) {
+      rest = rest.sublist(0, rest.length - 1);
+    }
+    final crop = rest.join(' ').trim();
+    return SmsCommand(
+      SmsCommandType.info,
+      fieldId: fieldId,
+      point: point,
+      text: crop.isEmpty ? null : crop,
+      goal: goal,
+    );
   }
 
   static GeoPoint? _point(String word) {
@@ -295,8 +348,21 @@ class SmsCommand {
   static String formatRegister(String fieldId, GeoPoint point, {String? crop}) =>
       'REG $fieldId ${point.format()}${crop == null ? '' : ' $crop'}';
 
-  /// Текст SMS «все данные поля».
-  static String formatInfo(String fieldId) => 'INFO $fieldId';
+  /// Текст SMS «отчёт и совет по полю»: с координатами и культурой поле
+  /// само регистрируется на сервере; цель фермер дописывает сам
+  /// (ВОДА, ПОЧВА, ДОХОД, УСТОЙЧИВОСТЬ).
+  static String formatInfo(String fieldId, {GeoPoint? point, String? crop, FarmerGoal? goal}) {
+    if (point == null) {
+      return 'INFO $fieldId';
+    }
+    return [
+      'INFO',
+      fieldId,
+      '${point.latitude.toStringAsFixed(4)},${point.longitude.toStringAsFixed(4)}',
+      if (crop != null && crop.trim().isNotEmpty) crop.trim().toUpperCase(),
+      if (goal != null) goal.name == 'water' ? 'ВОДА' : goal.name == 'soil' ? 'ПОЧВА' : goal.name == 'income' ? 'ДОХОД' : 'УСТОЙЧИВОСТЬ',
+    ].join(' ');
+  }
 
   static String formatRequest({
     String? fieldId,

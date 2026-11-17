@@ -13,6 +13,9 @@ class FieldRecord {
   /// Кэш климатологии NASA POWER (закодированный ClimateSummary).
   final String? climate;
 
+  /// Цель фермера из INFO (код FarmerGoal: w, s, i, r).
+  final String? goal;
+
   /// Кэш помесячной истории NASA POWER по годам (закодированный
   /// ClimateHistory) — для типов лет и трендов.
   final String? history;
@@ -25,18 +28,21 @@ class FieldRecord {
     required this.registeredAt,
     this.climate,
     this.history,
+    this.goal,
   });
 
   FieldRecord withClimate(String value) => copyWith(climate: value);
 
-  FieldRecord copyWith({String? climate, String? history}) => FieldRecord(
+  FieldRecord copyWith({String? climate, String? history, String? crop, String? goal}) =>
+      FieldRecord(
         fieldId: fieldId,
         latitude: latitude,
         longitude: longitude,
-        crop: crop,
+        crop: crop ?? this.crop,
         registeredAt: registeredAt,
         climate: climate ?? this.climate,
         history: history ?? this.history,
+        goal: goal ?? this.goal,
       );
 
   Map<String, dynamic> toJson() => {
@@ -47,6 +53,7 @@ class FieldRecord {
         'registered_at': registeredAt.toIso8601String(),
         'climate': climate,
         'history': history,
+        'goal': goal,
       };
 
   factory FieldRecord.fromJson(Map<String, dynamic> json) => FieldRecord(
@@ -57,6 +64,7 @@ class FieldRecord {
         registeredAt: DateTime.parse(json['registered_at'] as String),
         climate: json['climate'] as String?,
         history: json['history'] as String?,
+        goal: json['goal'] as String?,
       );
 }
 

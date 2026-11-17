@@ -5,6 +5,7 @@ import 'package:agrofy_core/models/climate_history.dart';
 import 'package:agrofy_core/models/climate_summary.dart';
 import 'package:crypto/crypto.dart';
 import 'package:agrofy_core/remote/data_package.dart';
+import 'package:agrofy_core/remote/field_code.dart';
 import 'package:agrofy_core/remote/sms_command.dart';
 import 'package:agrofy_core/remote/sms_text.dart';
 import 'package:agrofy_core/services/modis_service.dart';
@@ -254,13 +255,18 @@ void main() {
       expect(SmsText.paginate(['Коротко.']), ['Коротко.']);
     });
 
-    test('без интернета: INFO приходит всеми частями сразу', () async {
+    test('без интернета: INFO приходит всеми частями сразу, код — последним', () async {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
-      final parts = await h.sms('INFO F1');
+      final messages = await h.sms('INFO F1');
+      final code = messages.last;
+      final parts = messages.sublist(0, messages.length - 1);
+      expect(code, startsWith('AGF1;F1;40.2800;69.6200;cotton;'));
+      expect(SmsText.isGsm(code), isTrue);
+      expect(SmsText.segments(code), lessThanOrEqualTo(3));
       expect(parts.length, greaterThan(1));
-      expect(parts.first, startsWith('AGROFY: поле F1 (хлопок)'));
+      expect(parts.first, startsWith('AGROFY F1 (хлопок). Сеять дальше:'));
       expect(parts.first, endsWith('(1/${parts.length})'));
       expect(parts.last, endsWith('(${parts.length}/${parts.length})'));
       final all = parts.join(' ');
@@ -268,10 +274,80 @@ void main() {
       expect(all, isNot(contains('ЕЩЁ')));
       expect(all, contains('Варианты:'));
       expect(all, contains('посев'));
+      expect(all, contains('Вставить код из SMS'));
       for (final part in parts) {
         expect(SmsText.segments(part), lessThanOrEqualTo(3));
       }
-      expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
+      final decoded = FieldCode.find('Скопировано: $code');
+      expect(decoded.climate.tMean, hasLength(12));
+      expect(decoded.rotation, isNotEmpty);
+      expect(decoded.climate.annualPrecipMm, closeTo(khujand().annualPrecipMm, 6));
+    });
+
+    test('/INFO по координатам, культуре и цели: поле само, отчёт приходит позже', () async {
+      final h = await Harness.create();
+      final ack = (await h.sms('/info 40.28,69.62 пшеница вода')).single;
+      expect(ack, contains('поле F1 добавлено'));
+      await h.settle();
+      final sent = [for (final m in h.outbox()) m['text'] as String];
+      expect(sent.first, startsWith('AGROFY F1 (пшеница), цель — экономия воды. Сеять дальше:'));
+      final code = FieldCode.find(sent.last);
+      expect(code.goal, FarmerGoal.water);
+      expect(code.cropId, 'wheat');
+      final record = h.store.fields['+992900000001']!['F1']!;
+      expect(record.crop, 'пшеница');
+      expect(record.goal, 'w');
+
+      // Та же точка — то же поле, другая цель меняет рекомендацию.
+      final again = await h.sms('INFO 40.281,69.621 ПШЕНИЦА ДОХОД');
+      expect(h.store.fields['+992900000001']!.keys, ['F1']);
+      expect(FieldCode.find(again.last).goal, FarmerGoal.income);
+    });
+
+    test('INFO с номером поля из приложения и координатами', () async {
+      final h = await Harness.create();
+      await h.sms('INFO F5 40.28,69.62 ХЛОПОК ПОЧВА');
+      await h.settle();
+      final code = FieldCode.find(h.outbox().last['text'] as String);
+      expect(code.fieldId, 'F5');
+      expect(code.goal, FarmerGoal.soil);
+      expect(h.store.fields['+992900000001']!.keys, ['F5']);
+    });
+
+    test('разбор INFO с целью и культурой', () {
+      final c = SmsCommand.parse('/INFO 40.28,69.62 ХЛОПОК ЭКОНОМИЯ ВОДЫ');
+      expect(c.point!.latitude, 40.28);
+      expect(c.text, 'ХЛОПОК');
+      expect(c.goal, FarmerGoal.water);
+      final d = SmsCommand.parse('ИНФО F2 озимая пшеница доход');
+      expect(d.fieldId, 'F2');
+      expect(d.text, 'озимая пшеница');
+      expect(d.goal, FarmerGoal.income);
+      expect(SmsCommand.parse('INFO 99.9,69 ХЛОПОК').isValid, isFalse);
+      final e = SmsCommand.parse('INFO F5 40.2800,69.6200 ХЛОПОК ПОЧВА');
+      expect(e.fieldId, 'F5');
+      expect(e.point!.longitude, 69.62);
+      expect(e.goal, FarmerGoal.soil);
+      expect(
+        SmsCommand.formatInfo('F5', point: const GeoPoint(40.28, 69.62), crop: 'Хлопок'),
+        'INFO F5 40.2800,69.6200 ХЛОПОК',
+      );
+    });
+
+    test('код из SMS: повреждение и обрезка ловятся', () {
+      final code = FieldCode(
+        fieldId: 'F1',
+        latitude: 40.28,
+        longitude: 69.62,
+        cropId: 'cotton',
+        goal: FarmerGoal.soil,
+        climate: khujand(),
+        rotation: const ['cotton', 'chickpea', 'wheat'],
+      ).encode();
+      expect(FieldCode.find(code).goal, FarmerGoal.soil);
+      expect(() => FieldCode.find(code.substring(0, code.length - 20)), throwsFormatException);
+      expect(() => FieldCode.find(code.replaceFirst('40.2800', '41.2800')), throwsFormatException);
+      expect(() => FieldCode.find('просто текст'), throwsFormatException);
     });
 
     test('лимит частей за раз: остальные по ЕЩЁ, все сразу по ВСЁ', () async {
@@ -279,8 +355,10 @@ void main() {
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
       final first = await h.sms('INFO F1');
-      expect(first, hasLength(2));
-      expect(first.last, endsWith('Дальше: ЕЩЁ'));
+      // Две части текста и код — код уходит сразу, он главный для приложения.
+      expect(first, hasLength(3));
+      expect(first.last, startsWith('AGF1;'));
+      expect(first[1], endsWith('Дальше: ЕЩЁ'));
       final total = int.parse(RegExp(r'\(1/(\d+)\)$').firstMatch(first.first)!.group(1)!);
       expect(total, greaterThan(4));
       final next = await h.sms('еще');
@@ -289,7 +367,6 @@ void main() {
       final rest = await h.sms('ВСЁ');
       expect(rest, hasLength(total - 4));
       expect(rest.last, endsWith('($total/$total)'));
-      expect(rest.last, isNot(contains('ЕЩЁ')));
       expect((await h.sms('ЕЩЁ')).single, contains('продолжения нет'));
     });
 
@@ -331,7 +408,9 @@ void main() {
       final h = await Harness.create(reportLinks: true);
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       await h.settle();
-      final reply = (await h.sms('INFO F1')).single;
+      final messages = await h.sms('INFO F1');
+      expect(messages.last, startsWith('AGF1;'));
+      final reply = messages.first;
       expect(reply, startsWith('AGROFY: поле F1 (хлопок).'));
       expect(reply, contains('Полностью: https://sms.agrofy.test/r/'));
       expect(SmsText.segments(reply), lessThanOrEqualTo(3));
@@ -346,7 +425,7 @@ void main() {
       final h = await Harness.create();
       await h.sms('REG F1 40.28,69.62 ХЛОПОК');
       final early = (await h.sms('INFO')).single;
-      expect(early, contains('загружаются'));
+      expect(early, contains('собираю данные NASA'));
       await h.settle();
       final other = (await h.sms('INFO F1', from: '+992900000002')).single;
       expect(other, contains('не найдено'));
@@ -356,7 +435,7 @@ void main() {
       final h = await Harness.create(reportLinks: true);
       await h.sms('REG F1 40.28,69.62 <script>x</script>');
       await h.settle();
-      final html = await page(h, (await h.sms('INFO F1')).single);
+      final html = await page(h, (await h.sms('INFO F1')).first);
       expect(html, isNot(contains('<script>')));
       expect(html, contains('&lt;script&gt;'));
     });

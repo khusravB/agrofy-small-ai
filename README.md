@@ -114,12 +114,14 @@ itself never reads SMS.
   app, using the field's NASA climate. Replies fit in 3 SMS segments and keep the
   "подсказка, не диагноз" caveat. Follow-ups use the facts of the conversation
   (24 hours): "листья желтеют" → "в основном нижние, почва влажная".
-- **Field report by SMS, no internet needed.** `INFO F5` (button «Всё о
-  поле») returns everything the server knows about the field — rotations with
-  scores and irrigation, sowing dates, a drought year, NASA climate and trends —
-  as several numbered SMS sent at once. Any long answer works the same way; the
-  server can limit how many go out at once (the rest on `ЕЩЁ`). Links to a web
-  version are an optional server setting.
+- **Field report and advice by SMS, no internet needed.** `/INFO 40.28,69.62
+  ХЛОПОК ВОДА` — location, crop and goal (`ВОДА`, `ПОЧВА`, `ДОХОД`,
+  `УСТОЙЧИВОСТЬ`) — returns the NASA-based report and what to sow next as
+  several numbered SMS (button «Отчёт и совет» prepares it). The last SMS is a
+  code with the field's NASA monthly climate and the goal; «Вставить код из
+  SMS» saves it, and the advisor runs offline on the same data. No language
+  model or cloud AI API is used on the server: answers come from the same
+  rule-based engine and small models as in the app.
 - **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые
   данные» prepares `REG F5 lat,lon CROP`, `FIELD F5 NDVI 3M` or
   `FIELD F5 CLIMATE 1Y`. The server fetches MODIS NDVI (MOD13Q1, ORNL DAAC)

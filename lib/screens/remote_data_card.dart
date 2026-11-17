@@ -4,9 +4,11 @@ import 'package:agrofy_core/models/field.dart';
 import 'package:agrofy_core/remote/ndvi_summary.dart';
 import 'package:agrofy_core/remote/sms_command.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../services/database_service.dart';
+import '../services/field_code_importer.dart';
 import '../services/package_importer.dart';
 import '../services/sms_launcher.dart';
 import 'advisor_cards.dart';
@@ -201,6 +203,109 @@ class _RemoteDataCardState extends State<RemoteDataCard> {
     }
   }
 
+  /// Код из последнего SMS ответа на INFO: климат NASA и цель для советника.
+  Future<void> _pasteCode() async {
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) {
+      return;
+    }
+    final controller = TextEditingController(
+      text: (clip?.text ?? '').contains(RegExp('AGF1;')) ? clip!.text : '',
+    );
+    final importer = FieldCodeImporter(DatabaseService.instance);
+    FieldCodePreview? preview;
+    String? error;
+
+    final apply = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) {
+          void check() {
+            try {
+              preview = importer.preview(controller.text, widget.field);
+              error = null;
+            } on FormatException catch (e) {
+              preview = null;
+              error = controller.text.trim().isEmpty ? null : e.message;
+            }
+          }
+
+          check();
+          return AlertDialog(
+            title: const Text('Код из SMS'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Скопируйте последнее SMS ответа на INFO (начинается с AGF1;) '
+                    'и вставьте сюда.',
+                    style: TextStyle(color: Colors.black54, height: 1.4),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: controller,
+                    minLines: 3,
+                    maxLines: 6,
+                    onChanged: (_) => setDialog(() {}),
+                    decoration: const InputDecoration(
+                      hintText: 'AGF1;F1;40.2800;69.6200;…',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  if (error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(error!, style: const TextStyle(color: Color(0xFFB45309))),
+                    ),
+                  if (preview != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      'Поле ${preview!.code.fieldId}: климат NASA по месяцам'
+                      '${preview!.code.climate.period.isEmpty ? '' : ' (${preview!.code.climate.period})'}'
+                      '${preview!.code.goal == null ? '' : ', цель — ${preview!.code.goal!.label}'}.'
+                      '${preview!.rotationLabel.isEmpty ? '' : '\nСовет сервера: ${preview!.rotationLabel}.'}',
+                      style: const TextStyle(height: 1.4),
+                    ),
+                    for (final warning in preview!.warnings)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text('• $warning', style: const TextStyle(color: Color(0xFFB45309))),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _green),
+                onPressed: preview == null ? null : () => Navigator.pop(context, true),
+                child: const Text('Сохранить'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+    if (apply != true || preview == null || !mounted) {
+      return;
+    }
+    await importer.apply(preview!, widget.field);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Данные NASA сохранены — советник работает без интернета.')),
+    );
+    widget.onImported();
+  }
+
   /// Сводка перед импортом. Возвращает «заменять ли отличающиеся
   /// наблюдения» или null, если пользователь отказался.
   Future<bool?> _confirm(ImportPreview preview) {
@@ -335,8 +440,10 @@ class _RemoteDataCardState extends State<RemoteDataCard> {
                   child: const Text('Зарегистрировать поле'),
                 ),
                 OutlinedButton(
-                  onPressed: () => _send(SmsCommand.formatInfo(_fieldId)),
-                  child: const Text('Всё о поле'),
+                  onPressed: () => _send(
+                    SmsCommand.formatInfo(_fieldId, point: point, crop: widget.field.crop),
+                  ),
+                  child: const Text('Отчёт и совет'),
                 ),
                 OutlinedButton(
                   onPressed: () => _send(
@@ -353,6 +460,11 @@ class _RemoteDataCardState extends State<RemoteDataCard> {
               ],
             ),
           const SizedBox(height: 4),
+          OutlinedButton.icon(
+            onPressed: _pasteCode,
+            icon: const Icon(Icons.content_paste),
+            label: const Text('Вставить код из SMS'),
+          ),
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: _green),
             onPressed: _importing ? null : _import,

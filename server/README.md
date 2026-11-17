@@ -17,7 +17,7 @@ gives; no cloud language model is called.
 | `HELP` / `ПОМОЩЬ` / `?` | Short list of commands |
 | `REG F1 40.28,69.62 ХЛОПОК` / `РЕГ …` | Registers field F1 for this phone, downloads NASA POWER climate for it once |
 | `FIELD F1` / `ПОЛЕ F1` | Makes F1 the active field for questions |
-| `INFO F1` / `ИНФО F1` (or `INFO` for the active field) | Everything about the field, in several SMS: recommended and all rotations with scores and irrigation, sowing dates, drought year, climate, year types and trends |
+| `/INFO 40.28,69.62 ХЛОПОК ВОДА`, `INFO F5 40.28,69.62 ХЛОПОК ПОЧВА`, `INFO F1 ДОХОД`, `INFO` | Full NASA report for the field and what to sow next, tuned to the goal (`ВОДА`, `ПОЧВА`, `ДОХОД`, `УСТОЙЧИВОСТЬ`): rotations with scores and irrigation, sowing dates, a drought year, climate. A new point is registered as a field automatically; if NASA data still has to be fetched, the report arrives by SMS 1–2 minutes later. The last SMS is a code for the app (see below) |
 | `ЕЩЁ` / `MORE`, `ВСЁ` / `ALL` | Next waiting parts of a long answer, or all of them (only when `AGROFY_PAGES_AT_ONCE` is below the number of parts) |
 | `FIELDS` / `ПОЛЯ` | Fields registered from this phone |
 | `FIELD F1 NDVI 90D` | MODIS NDVI package for F1 (default 90 days, max 366) |
@@ -42,6 +42,16 @@ part sent ends with `Дальше: ЕЩЁ`, and the farmer sends `ЕЩЁ` for th
 parts or `ВСЁ` for all of them. Waiting parts are kept for 24 hours and dropped
 by the next new message. Observation replies put the action and the
 "не диагноз" caveat in part 1 and the reasons, plan and options after it.
+
+**Code for the app.** The last SMS of an `INFO` reply is a line of Latin
+letters and digits (`AGF1;F1;40.2800;69.6200;cotton;w;…;627e55`, about 340
+characters, one SMS): the field, the crop, the goal, NASA POWER monthly
+climate (mean, range and maximum temperature, rainfall, frost days, root-zone
+wetness), the recommended rotation and a checksum. In the app, «Вставить код
+из SMS» checks the checksum, the distance from the field and the crop, then
+saves the climate and the goal — the advisor then works offline on the same
+NASA data. Year types and trends are not in the code (35 years of history do
+not fit an SMS); the app gets them when it has internet once.
 
 Data requests arrive as text too: NDVI as dates and values
 (`14.09 0.18; 30.09 0.22; 16.10 0.13 обл.`, monthly means for `HISTORY`),

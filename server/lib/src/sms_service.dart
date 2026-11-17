@@ -12,6 +12,8 @@ import 'package:agrofy_core/decision/observation.dart';
 import 'package:agrofy_core/decision/observation_interpreter.dart';
 import 'package:agrofy_core/models/climate_summary.dart';
 import 'package:agrofy_core/models/field.dart';
+import 'package:agrofy_core/remote/field_code.dart';
+import 'package:agrofy_core/models/farmer_priorities.dart';
 import 'package:agrofy_core/remote/package_text.dart';
 import 'package:agrofy_core/remote/sms_command.dart';
 import 'package:agrofy_core/remote/sms_text.dart';
@@ -46,7 +48,7 @@ class SmsService {
 
   static const String helpText =
       'AGROFY: вопрос — обычным текстом. Поле: REG F1 40.28,69.62 ХЛОПОК. '
-      'Всё о поле: INFO F1. Поля: FIELDS. Спутник: FIELD F1 NDVI 90D. '
+      'Отчёт и совет: INFO F1 ВОДА. Поля: FIELDS. Спутник: FIELD F1 NDVI 90D. '
       'ЕЩЁ — продолжение, NEW — сброс, STOP — отписка.';
 
   final ServerConfig config;
@@ -691,45 +693,141 @@ class SmsService {
       .where((l) => l.isNotEmpty)
       .toList();
 
-  /// INFO F1: все данные поля одним отчётом по ссылке и короткая сводка.
+  /// INFO [F1 | широта,долгота] [КУЛЬТУРА] [ЦЕЛЬ]: полный отчёт по данным
+  /// NASA и рекомендация, что сеять дальше, плюс код для приложения
+  /// последним SMS. Поле по новым координатам регистрируется само; если
+  /// данные NASA ещё не скачаны, отчёт придёт отдельными SMS, когда будут.
   Future<SmsOutcome> _info(
     InboundSms sms,
     SmsCommand command,
     Conversation conversation,
     DateTime now,
   ) async {
-    final id = command.fieldId ?? conversation.activeField;
-    if (id == null) {
-      return SmsOutcome([
-        _fit(['AGROFY: укажите поле: INFO F1.', 'Список полей: FIELDS.']),
-      ]);
-    }
-    final record = store.fields[sms.from]?[id];
-    if (record == null) {
-      return SmsOutcome([
-        _fit([
-          'AGROFY: поле $id не найдено для этого номера.',
-          'Зарегистрируйте: REG $id 40.28,69.62 ХЛОПОК',
-        ]),
-      ]);
-    }
-    conversation.activeField = id;
+    final mine = store.fields.putIfAbsent(sms.from, () => {});
+    FieldRecord? record;
+    var created = false;
 
-    final climate = await _climateFor(sms.from, record);
-    final history = _cachedHistory(store.fields[sms.from]?[id]);
-    if (climate == null || history == null) {
-      return SmsOutcome(
-        [
+    if (command.point != null && command.fieldId != null) {
+      // Номер поля из приложения и его координаты: создать или обновить.
+      final point = command.point!;
+      final old = mine[command.fieldId];
+      final moved = old == null ||
+          (old.latitude - point.latitude).abs() > 0.0005 ||
+          (old.longitude - point.longitude).abs() > 0.0005;
+      if (moved) {
+        record = FieldRecord(
+          fieldId: command.fieldId!,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          crop: command.text ?? old?.crop,
+          registeredAt: now,
+          goal: old?.goal,
+        );
+        mine[record.fieldId] = record;
+        created = old == null;
+      } else {
+        record = old;
+      }
+    } else if (command.point != null) {
+      final point = command.point!;
+      // Та же точка (до ~500 м) — то же поле.
+      for (final r in mine.values) {
+        if ((r.latitude - point.latitude).abs() < 0.005 &&
+            (r.longitude - point.longitude).abs() < 0.005) {
+          record = r;
+        }
+      }
+      if (record == null) {
+        var n = 1;
+        while (mine.containsKey('F$n')) {
+          n++;
+        }
+        record = FieldRecord(
+          fieldId: 'F$n',
+          latitude: point.latitude,
+          longitude: point.longitude,
+          crop: command.text,
+          registeredAt: now,
+        );
+        mine[record.fieldId] = record;
+        created = true;
+      }
+    } else {
+      final id = command.fieldId ?? conversation.activeField;
+      if (id == null) {
+        return SmsOutcome([
           _fit([
-            'AGROFY: данные NASA для поля $id ещё загружаются.',
-            'Повторите INFO $id через 1–2 минуты.',
+            'AGROFY: укажите поле или точку: INFO 40.28,69.62 ХЛОПОК ВОДА.',
+            'Ваши поля: FIELDS.',
           ]),
-        ],
-        () => _historyFor(sms.from, store.fields[sms.from]?[id] ?? record).then((_) {}),
-      );
+        ]);
+      }
+      record = mine[id];
+      if (record == null) {
+        return SmsOutcome([
+          _fit([
+            'AGROFY: поле $id не найдено для этого номера.',
+            'Отправьте: INFO 40.28,69.62 ХЛОПОК ВОДА — поле добавится само.',
+          ]),
+        ]);
+      }
     }
 
-    final patterns = history.years.length < 6 ? null : const ClimatePatternModel().train(history);
+    // Культура и цель из команды запоминаются для следующих вопросов.
+    if (command.text != null || command.goal != null) {
+      record = record.copyWith(crop: command.text, goal: command.goal?.code);
+      mine[record.fieldId] = record;
+    }
+    conversation.activeField = record.fieldId;
+    final fieldId = record.fieldId;
+
+    if (record.climate != null && _cachedHistory(record) != null) {
+      return SmsOutcome(await _infoMessages(sms, mine[fieldId]!, conversation));
+    }
+
+    Future<void> work() async {
+      final current = store.fields[sms.from]![fieldId]!;
+      await _climateFor(sms.from, current);
+      await _historyFor(sms.from, store.fields[sms.from]![fieldId]!);
+      final ready = store.fields[sms.from]![fieldId]!;
+      final List<String> messages;
+      if (ready.climate == null) {
+        messages = ['AGROFY: не удалось получить данные NASA для поля $fieldId. Повторите INFO позже.'];
+      } else {
+        messages = await _infoMessages(sms, ready, store.conversation(sms.from, clock()));
+      }
+      await store.save();
+      for (final message in messages) {
+        await provider.send(sms.from, message);
+      }
+      await _audit(sms.from, 'info_ready', messages);
+    }
+
+    return SmsOutcome(
+      [
+        _fit([
+          created
+              ? 'AGROFY: поле $fieldId добавлено (${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)}).'
+              : 'AGROFY: собираю данные NASA для поля $fieldId.',
+          'Отчёт и код для приложения придут SMS через 1–2 минуты.',
+        ]),
+      ],
+      work,
+    );
+  }
+
+  /// Отчёт по полю: текстовые SMS (сначала рекомендация) и последним —
+  /// код для приложения.
+  Future<List<String>> _infoMessages(
+    InboundSms sms,
+    FieldRecord record,
+    Conversation conversation,
+  ) async {
+    final climate = ClimateSummary.decode(record.climate!);
+    final history = _cachedHistory(record);
+    final patterns =
+        history == null || history.years.length < 6 ? null : const ClimatePatternModel().train(history);
+    final goal = record.goal == null ? null : FarmerGoal.fromCode(record.goal!);
     final field = _fieldOf(record);
     final cropId = _cropId(record.crop);
     final result = _advisor.advise(
@@ -737,6 +835,7 @@ class SmsService {
       historyCropIds: cropId == null ? const [] : [cropId],
       climate: climate,
       patterns: patterns,
+      priorities: goal?.priorities() ?? const FarmerPriorities(),
     );
     final context = AssistantContext(
       field: field,
@@ -748,18 +847,23 @@ class SmsService {
 
     final cropName = record.crop?.toLowerCase();
     final best = result.best;
+    final where = '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)}';
+    final years = history == null
+        ? null
+        : '${history.years.first.year}–${history.years.last.year}';
+
     final sections = [
       ReportSection('Поле', items: [
         'ID: ${record.fieldId}',
         'Координаты: ${record.latitude.toStringAsFixed(4)}, ${record.longitude.toStringAsFixed(4)}',
         'Культура: ${cropName ?? 'не указана'}',
+        if (goal != null) 'Цель: ${goal.label}',
       ]),
       ReportSection('Климат участка (NASA POWER)', paragraphs: ask('Как меняется климат?')),
       if (result.blocker != null)
         ReportSection('Севооборот', paragraphs: [
           result.blocker!,
-          'Укажите культуру: REG ${record.fieldId} '
-              '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)} ХЛОПОК',
+          'Укажите культуру: INFO ${record.fieldId} ХЛОПОК',
         ])
       else ...[
         ReportSection('Рекомендация', paragraphs: ask('Какой севооборот лучше?')),
@@ -772,51 +876,63 @@ class SmsService {
         ReportSection('Засушливый год', paragraphs: ask('Что если будет засуха?')),
       ],
       ReportSection('Откуда данные', items: [
-        'NASA POWER: климатология и помесячная история '
-            '${history.years.first.year}–${history.years.last.year}, ячейка около 50 км',
+        'NASA POWER: климатология${years == null ? '' : ' и помесячная история $years'}, ячейка около 50 км',
         'Справочник культур AGROFY (общие значения, без проверки агрономом)',
-        'Спутниковые данные поля: FIELD ${record.fieldId} NDVI 90D',
       ]),
     ];
     final summary = <String>[
       'AGROFY: поле ${record.fieldId}${cropName == null ? '' : ' ($cropName)'}.',
       if (best != null && !best.isCurrent)
-        'Советую «${best.title}»: ${best.total.round()} из 100.'
+        'Сеять дальше: ${best.sequenceLabel} (${best.total.round()} из 100).'
       else if (best != null)
         'Текущий севооборот лучший: ${best.total.round()} из 100.'
       else
         'Культура не указана — севооборот не рассчитан.',
     ];
 
-    // Текстом, по страницам: сначала главное.
+    // Сначала главное — что сеять дальше, потом обоснование и климат.
+    final head = 'AGROFY ${record.fieldId}${cropName == null ? '' : ' ($cropName)'}'
+        '${goal == null ? '' : ', цель — ${goal.label}'}';
     final parts = <String>[
-      'AGROFY: поле ${record.fieldId}${cropName == null ? '' : ' ($cropName)'}, '
-          '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)}.',
       if (result.blocker != null)
-        'Культура не указана — севооборот не рассчитан. Отправьте: REG ${record.fieldId} '
-            '${record.latitude.toStringAsFixed(2)},${record.longitude.toStringAsFixed(2)} ХЛОПОК.'
-      else ...[
-        if (best != null && !best.isCurrent)
-          'Совет: «${best.title}» — ${best.sequenceLabel}, ${best.total.round()} из 100.'
-        else if (best != null)
-          'Текущий севооборот лучший: ${best.total.round()} из 100.',
+        '$head: культура не указана — севооборот не рассчитан. Отправьте: INFO ${record.fieldId} ХЛОПОК ВОДА.'
+      else if (best != null && !best.isCurrent)
+        '$head. Сеять дальше: ${best.sequenceLabel} — ${best.total.round()} из 100 '
+            '(сейчас ${result.strategies.first.total.round()}).'
+      else if (best != null)
+        '$head. Текущий севооборот лучший: ${best.total.round()} из 100.'
+      else
+        '$head.',
+      'Последнее SMS — код для приложения: скопируйте его и вставьте в AGROFY → «Вставить код из SMS».',
+      if (result.blocker == null) ...[
+        if (best != null) ...best.why.take(1),
         'Варианты: ${result.strategies.map((s) => '${s.title} ${s.total.round()} (полив ${s.avgIrrigationMm.round()} мм)').join('; ')}.',
         ...ask('Когда сеять ${cropName ?? ''}?'),
         ...ask('Что если будет засуха?').skip(1),
       ],
+      'Поле: $where. Данные NASA POWER${years == null ? '' : ' $years'}.',
       ...ask('Как меняется климат?'),
     ];
 
-    return SmsOutcome(
-      await _long(
-        sms,
-        conversation,
-        parts,
-        title: 'Поле ${record.fieldId}${cropName == null ? '' : ' · $cropName'}',
-        sections: () => sections,
-        shortParts: summary,
-      ),
+    final text = await _long(
+      sms,
+      conversation,
+      parts,
+      title: 'Поле ${record.fieldId}${cropName == null ? '' : ' · $cropName'}',
+      sections: () => sections,
+      shortParts: summary,
     );
+
+    final code = FieldCode(
+      fieldId: record.fieldId,
+      latitude: record.latitude,
+      longitude: record.longitude,
+      cropId: cropId,
+      goal: goal,
+      climate: climate,
+      rotation: best == null ? const [] : [for (final y in best.years) y.main.crop.id],
+    ).encode();
+    return [...text, code];
   }
 
   static Field _fieldOf(FieldRecord? record) => Field(

@@ -4,7 +4,9 @@ import 'package:agrofy_core/models/field.dart';
 import 'package:agrofy_core/remote/data_package.dart';
 import 'package:agrofy_core/remote/ndvi_summary.dart';
 import 'package:agrofy_core/services/rotation_advisor.dart';
+import 'package:agrofy_core/remote/field_code.dart';
 import 'package:agrofy_small_ai/services/database_service.dart';
+import 'package:agrofy_small_ai/services/field_code_importer.dart';
 import 'package:agrofy_small_ai/services/package_importer.dart';
 import 'package:agrofy_small_ai/services/sms_launcher.dart';
 import 'package:archive/archive.dart';
@@ -198,6 +200,57 @@ void main() {
       );
 
       expect(result.insights.last, contains('NDVI MODIS'));
+    });
+  });
+
+  group('Код поля из SMS', () {
+    FieldCode code({double latitude = 40.28, String crop = 'cotton', FarmerGoal goal = FarmerGoal.water}) =>
+        FieldCode(
+          fieldId: 'F1',
+          latitude: latitude,
+          longitude: 69.62,
+          cropId: crop,
+          goal: goal,
+          climate: khujandClimate(),
+          rotation: const ['cotton', 'chickpea', 'wheat'],
+        );
+
+    test('вставка сохраняет климат NASA и цель — советник считает без сети', () async {
+      final importer = FieldCodeImporter(DatabaseService.instance);
+      final sms = 'AGROFY прислал код:\n${code().encode()}';
+      final preview = importer.preview(sms, field);
+      expect(preview.warnings, isEmpty);
+      expect(preview.rotationLabel, 'Хлопок → Нут → Пшеница озимая');
+
+      await importer.apply(preview, field);
+      final climate = await DatabaseService.instance.getCachedClimate(1);
+      expect(climate, isNotNull);
+      expect(climate!.annualPrecipMm, closeTo(khujandClimate().annualPrecipMm, 6));
+      final priorities = await DatabaseService.instance.getPriorities(1);
+      expect(priorities.water, 1.0);
+      expect(priorities.income, 0.3);
+
+      final result = const RotationAdvisor().advise(
+        field: field,
+        historyCropIds: const ['cotton'],
+        climate: climate,
+        priorities: priorities,
+      );
+      expect(result.blocker, isNull);
+      expect(result.best, isNotNull);
+    });
+
+    test('чужая точка и другая культура — предупреждения', () {
+      final importer = FieldCodeImporter(DatabaseService.instance);
+      final preview = importer.preview(code(latitude: 41.0, crop: 'wheat').encode(), field);
+      expect(preview.warnings.join(' '), contains('км от координат'));
+      expect(preview.warnings.join(' '), contains('Пшеница'));
+    });
+
+    test('обрезанный код не принимается', () {
+      final importer = FieldCodeImporter(DatabaseService.instance);
+      final text = code().encode();
+      expect(() => importer.preview(text.substring(0, text.length - 30), field), throwsFormatException);
     });
   });
 }
