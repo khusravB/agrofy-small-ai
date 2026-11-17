@@ -3,7 +3,7 @@ import 'dart:io';
 enum ProviderKind { twilio, vonage, generic }
 
 /// Языковая модель для /ВОПРОС.
-enum LlmProvider { openai, anthropic, local }
+enum LlmProvider { gemini, openai, anthropic, local }
 
 /// Настройки сервера из переменных окружения. Секреты в код не попадают.
 class ServerConfig {
@@ -53,7 +53,12 @@ class ServerConfig {
   /// Адрес своей модели (OpenAI-совместимый llama-server).
   final String llmUrl;
 
-  /// Ключ OpenAI для /ВОПРОС (модель GPT-5.6 Luna по умолчанию).
+  /// Ключ Gemini API для /ВОПРОС (модель Gemini 3.1 Flash-Lite по умолчанию).
+  final String? geminiApiKey;
+  final String geminiModel;
+  final String geminiThinking;
+
+  /// Ключ OpenAI для /ВОПРОС (GPT-5.6 Luna).
   final String? openaiApiKey;
   final String openaiModel;
   final String openaiEffort;
@@ -95,7 +100,10 @@ class ServerConfig {
     this.maxPages = 8,
     this.pagesAtOnce = 8,
     this.anthropicApiKey,
-    this.llmProvider = LlmProvider.openai,
+    this.llmProvider = LlmProvider.gemini,
+    this.geminiApiKey,
+    this.geminiModel = 'gemini-3.1-flash-lite',
+    this.geminiThinking = 'low',
     this.openaiApiKey,
     this.openaiModel = 'gpt-5.6-luna',
     this.openaiEffort = 'low',
@@ -143,8 +151,12 @@ class ServerConfig {
       llmProvider: switch (e['AGROFY_LLM_PROVIDER']) {
         'local' => LlmProvider.local,
         'anthropic' => LlmProvider.anthropic,
-        _ => LlmProvider.openai,
+        'openai' => LlmProvider.openai,
+        _ => LlmProvider.gemini,
       },
+      geminiApiKey: e['GEMINI_API_KEY'],
+      geminiModel: e['AGROFY_GEMINI_MODEL'] ?? 'gemini-3.1-flash-lite',
+      geminiThinking: e['AGROFY_GEMINI_THINKING'] ?? 'low',
       openaiApiKey: e['OPENAI_API_KEY'],
       openaiModel: e['AGROFY_OPENAI_MODEL'] ?? 'gpt-5.6-luna',
       openaiEffort: e['AGROFY_OPENAI_EFFORT'] ?? 'low',

@@ -123,8 +123,8 @@ itself never reads SMS.
   from the same rule-based engine and small models as in the app.
 - **Any question to a language model by SMS (optional).** `/ВОПРОС текст`
   sends the question with the field's data (not the phone number) to a
-  language model: OpenAI GPT-5.6 Luna (default, about $0.0007 per question),
-  Claude Haiku 5.5 through the Anthropic API, or, without any API, an own
+  language model: Google Gemini 3.1 Flash-Lite (default), OpenAI GPT-5.6
+  Luna or Claude Haiku 5.5 through their APIs, or, without any API, an own
   Qwen2.5-1.5B on the server (llama.cpp; answers checked and often declined). The
   answer comes back as SMS, marked as a language model's answer. Without the
   command, questions stay with the built-in small AI.

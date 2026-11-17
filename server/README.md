@@ -72,10 +72,21 @@ first sentence always carries the "подсказка, не диагноз" cave
 ## Language model (`/ВОПРОС`)
 
 Everything else on the server is the rule-based "small AI" shared with the app.
-`/ВОПРОС` is the one place a generative language model is used. Three options,
+`/ВОПРОС` is the one place a generative language model is used. Four options,
 chosen with `AGROFY_LLM_PROVIDER`:
 
-**`openai` (default) — GPT-5.6 Luna through the OpenAI Responses API.**
+**`gemini` (default) — Gemini 3.1 Flash-Lite through the Gemini Interactions
+API.** `POST https://generativelanguage.googleapis.com/v1beta/interactions`
+(revision `2026-05-20`), model `gemini-3.1-flash-lite`, thinking level `low`,
+`store: false`. Paid tier: $0.25 per million input and $1.50 per million
+output tokens (thinking included), about $0.0008 per question. Google also
+offers a free tier for this model, but on the free tier Google may use the
+requests to improve its products — the questions and the field data (never the
+phone number) would go there; for real farmers use a paid key. Needs
+`GEMINI_API_KEY`; `AGROFY_GEMINI_MODEL` and `AGROFY_GEMINI_THINKING` change the
+model and thinking level.
+
+**`openai` — GPT-5.6 Luna through the OpenAI Responses API.**
 `POST https://api.openai.com/v1/responses`, model `gpt-5.6-luna`, reasoning
 effort `low`, `store: false` (questions are not kept by OpenAI). At $0.20 per
 million input and $1.20 per million output tokens a question with the field's
@@ -204,8 +215,9 @@ Dart or a Docker image with Dart works. It needs a public HTTPS URL.
 | `AGROFY_WEBHOOK_SECRET` | Generic provider: shared secret, 16+ characters |
 | `AGROFY_OUTBOUND_URL` | Generic provider: URL that accepts JSON `{to, text}` to send SMS |
 | `AGROFY_AUDIT_SALT` | Salt for phone hashes in the audit log |
-| `AGROFY_LLM_PROVIDER` | `openai` (default, GPT-5.6 Luna), `anthropic` (Claude Haiku 5.5) or `local` (own model, `--profile llm`) |
-| `OPENAI_API_KEY`, `AGROFY_OPENAI_MODEL`, `AGROFY_OPENAI_EFFORT` | OpenAI key (unset: `/ВОПРОС` is off), model (`gpt-5.6-luna`), reasoning effort (`low`) |
+| `AGROFY_LLM_PROVIDER` | `gemini` (default, Gemini 3.1 Flash-Lite), `openai` (GPT-5.6 Luna), `anthropic` (Claude Haiku 5.5) or `local` (own model, `--profile llm`) |
+| `GEMINI_API_KEY`, `AGROFY_GEMINI_MODEL`, `AGROFY_GEMINI_THINKING` | Gemini key (unset: `/ВОПРОС` is off), model (`gemini-3.1-flash-lite`), thinking level (`low`) |
+| `OPENAI_API_KEY`, `AGROFY_OPENAI_MODEL`, `AGROFY_OPENAI_EFFORT` | OpenAI key, model (`gpt-5.6-luna`), reasoning effort (`low`) |
 | `AGROFY_LLM_URL`, `AGROFY_LLM_HF` | Own model address (default `http://llm:8080`) and GGUF model (default `Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`) |
 | `ANTHROPIC_API_KEY` | Claude API key for `/ВОПРОС` with `anthropic` (unset: the command is off) |
 | `AGROFY_LLM_MODEL`, `AGROFY_LLM_EFFORT`, `AGROFY_LLM_PER_DAY` | Model (default `claude-opus-5-5`), effort (`medium`), questions per phone per day (10) |

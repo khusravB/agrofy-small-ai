@@ -24,8 +24,8 @@ class LlmAnswer {
   bool get ok => text != null;
 }
 
-/// Свободные вопросы фермера по команде /ВОПРОС: GPT-5.6 Luna через OpenAI
-/// Responses API (по умолчанию), Claude через Messages API или своя модель
+/// Свободные вопросы фермера по команде /ВОПРОС: Gemini 3.1 Flash-Lite через
+/// Interactions API (по умолчанию), GPT-5.6 Luna через OpenAI Responses API, Claude через Messages API или своя модель
 /// (llama.cpp на сервере AGROFY). Claude — через Messages API (для Dart нет официального
 /// SDK, поэтому прямой HTTP-запрос). Номер
 /// телефона в запрос не попадает: только вопрос и данные поля.
@@ -68,6 +68,7 @@ class LlmService {
 
   bool get enabled => switch (config.llmProvider) {
         LlmProvider.local => true,
+        LlmProvider.gemini => _has(config.geminiApiKey),
         LlmProvider.openai => _has(config.openaiApiKey),
         LlmProvider.anthropic => _has(config.anthropicApiKey),
       };
@@ -75,9 +76,71 @@ class LlmService {
   /// Подпись модели в журнале.
   String get modelName => switch (config.llmProvider) {
         LlmProvider.local => 'local',
+        LlmProvider.gemini => config.geminiModel,
         LlmProvider.openai => config.openaiModel,
         LlmProvider.anthropic => config.llmModel,
       };
+
+  static const String geminiEndpoint =
+      'https://generativelanguage.googleapis.com/v1beta/interactions';
+
+  /// Схема ответа Interactions API по ревизии мая 2026 года.
+  static const String geminiRevision = '2026-05-20';
+
+  /// Gemini Interactions API. store: false — запрос не сохраняется для
+  /// последующего чтения. max_output_tokens включает размышления модели.
+  Map<String, dynamic> geminiBody(String question, String context) => {
+        'model': config.geminiModel,
+        'system_instruction': systemPrompt,
+        'input': '$context\n\nВопрос фермера: $question',
+        'generation_config': {
+          'max_output_tokens': 4000,
+          'thinking_level': config.geminiThinking,
+        },
+        'store': false,
+      };
+
+  Future<LlmAnswer> _askGemini(String question, String context) async {
+    http.Response response;
+    try {
+      response = await client
+          .post(
+            Uri.parse(geminiEndpoint),
+            headers: {
+              'content-type': 'application/json',
+              'x-goog-api-key': config.geminiApiKey!,
+              'api-revision': geminiRevision,
+            },
+            body: jsonEncode(geminiBody(question, context)),
+          )
+          .timeout(const Duration(seconds: 120));
+    } on Object catch (e) {
+      return LlmAnswer.failed('gemini network: $e');
+    }
+    if (response.statusCode != 200) {
+      return LlmAnswer.failed('gemini http ${response.statusCode}');
+    }
+    final json = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    final texts = <String>[
+      for (final step in json['steps'] as List? ?? const [])
+        if (step is Map && step['type'] == 'model_output')
+          for (final part in step['content'] as List? ?? const [])
+            if (part is Map && part['type'] == 'text') '${part['text']}',
+    ];
+    final text = texts.join('\n').trim();
+    if (text.isEmpty) {
+      // Без текста: блокировка фильтром безопасности или сбой.
+      return LlmAnswer.failed(json['status'] == 'failed' ? 'refusal' : 'empty (${json['status']})');
+    }
+    final usage = json['usage'] as Map<String, dynamic>? ?? const {};
+    int count(String key) => (usage[key] as num?)?.toInt() ?? 0;
+    return LlmAnswer.ok(
+      text,
+      inputTokens: count('total_input_tokens'),
+      // Размышления оплачиваются как выходные токены.
+      outputTokens: count('total_output_tokens') + count('total_thought_tokens'),
+    );
+  }
 
   static const String openaiEndpoint = 'https://api.openai.com/v1/responses';
 
@@ -210,6 +273,9 @@ class LlmService {
     }
     if (config.llmProvider == LlmProvider.openai) {
       return _askOpenAi(question, context);
+    }
+    if (config.llmProvider == LlmProvider.gemini) {
+      return _askGemini(question, context);
     }
     http.Response response;
     try {

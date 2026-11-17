@@ -114,6 +114,8 @@ class Harness {
     String llmModel = 'claude-haiku-5-5',
     String? openaiKey,
     http.Response Function(http.Request)? openai,
+    String? geminiKey,
+    http.Response Function(http.Request)? gemini,
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -137,8 +139,11 @@ class Harness {
           ? LlmProvider.local
           : anthropicKey != null
               ? LlmProvider.anthropic
-              : LlmProvider.openai,
+              : openaiKey != null
+                  ? LlmProvider.openai
+                  : LlmProvider.gemini,
       openaiApiKey: openaiKey,
+      geminiApiKey: geminiKey,
       llmModel: llmModel,
       llmPerDay: 3,
     );
@@ -148,6 +153,9 @@ class Harness {
     final apiCalls = <http.Request>[];
     final client = MockClient((request) async {
       apiCalls.add(request);
+      if (request.url.host == 'generativelanguage.googleapis.com') {
+        return gemini == null ? http.Response('{"error":{}}', 500) : gemini(request);
+      }
       if (request.url.host == 'api.openai.com') {
         return openai == null ? http.Response('{"error":{}}', 500) : openai(request);
       }
@@ -692,6 +700,76 @@ void main() {
                 {'type': 'refusal', 'refusal': 'I can’t help with that.'},
               ])
             : http.Response('{"error":{"type":"server_error"}}', 500),
+      );
+      await h.sms('/ВОПРОС первый');
+      await h.settle();
+      expect(h.outbox().last['text'], contains('не отвечает'));
+      await h.sms('/ВОПРОС второй');
+      await h.settle();
+      expect(h.outbox().last['text'], contains('недоступна'));
+    });
+
+    http.Response interaction(List<Map<String, Object?>> steps, {String status = 'completed'}) =>
+        http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'id': 'v1_abc',
+            'status': status,
+            'model': 'gemini-3.1-flash-lite',
+            'steps': steps,
+            'usage': {
+              'total_input_tokens': 1200,
+              'total_output_tokens': 150,
+              'total_thought_tokens': 90,
+              'total_tokens': 1440,
+            },
+          })),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+
+    test('Gemini 3.1 Flash-Lite по умолчанию: Interactions API, store false', () async {
+      final h = await Harness.create(
+        geminiKey: 'AIza-test',
+        gemini: (_) => interaction([
+          {'type': 'thought', 'summary': []},
+          {
+            'type': 'model_output',
+            'content': [
+              {'type': 'text', 'text': 'В июле хлопок поливают по бороздам каждые 7–10 дней.'},
+            ],
+          },
+        ]),
+      );
+      await h.sms('INFO 40.28,69.62 ХЛОПОК ВОДА');
+      await h.settle();
+      await h.sms('/ВОПРОС как часто поливать хлопок в июле?');
+      await h.settle();
+
+      final call = h.apiCalls.singleWhere((r) => r.url.host == 'generativelanguage.googleapis.com');
+      expect(call.url.path, '/v1beta/interactions');
+      expect(call.headers['x-goog-api-key'], 'AIza-test');
+      expect(call.headers['api-revision'], '2026-05-20');
+      final body = jsonDecode(call.body) as Map;
+      expect(body['model'], 'gemini-3.1-flash-lite');
+      expect(body['store'], false);
+      expect(body['generation_config'], {'max_output_tokens': 4000, 'thinking_level': 'low'});
+      expect(body['system_instruction'], contains('агрономический помощник'));
+      expect(body['input'], contains('Июль: средняя температура'));
+      expect(call.body, isNot(contains('992900000001')));
+
+      expect(h.outbox().last['text'], startsWith('AGROFY (ИИ): В июле хлопок поливают по бороздам'));
+      final audit = File('${h.dir.path}/audit.jsonl').readAsLinesSync().last;
+      expect(audit, contains('"model":"gemini-3.1-flash-lite"'));
+      expect(audit, contains('"output_tokens":240')); // 150 ответ + 90 размышления
+    });
+
+    test('Gemini: пустой ответ (блокировка) и ошибка API — короткий ответ', () async {
+      var n = 0;
+      final h = await Harness.create(
+        geminiKey: 'AIza-test',
+        gemini: (_) => ++n == 1
+            ? interaction(const [], status: 'failed')
+            : http.Response('{"error":{"code":429}}', 429),
       );
       await h.sms('/ВОПРОС первый');
       await h.settle();
