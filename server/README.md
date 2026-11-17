@@ -75,27 +75,26 @@ Everything else on the server is the rule-based "small AI" shared with the app.
 `/ВОПРОС` is the one place a generative language model is used. Two options,
 chosen with `AGROFY_LLM_PROVIDER`:
 
+**`anthropic` (default) — Claude Haiku 5.5 through the API.** Model
+`claude-haiku-5-5` via the Messages API, direct HTTP (there is no official
+Dart SDK). At $0.10 per million input and $0.50 per million output tokens, a
+question with the field's data (~1,000–1,500 tokens in, ~300 out) costs about
+$0.0003, roughly 3,000 questions per dollar. `AGROFY_LLM_MODEL` can switch to
+a stronger model (e.g. `claude-opus-5-5`, for which server-side refusal
+fallback is turned on automatically; Haiku 5.5 has none, so a refusal gets a
+short reply). `AGROFY_LLM_EFFORT` defaults to `medium`. Off unless
+`ANTHROPIC_API_KEY` is set.
+
 **`local` — own model on the same server, no API fees.** llama.cpp
 (`ghcr.io/ggml-org/llama.cpp:server-b11977`) runs Qwen2.5-1.5B-Instruct (4-bit,
 ~1.1 GB RAM) as the `llm` service of `deploy/docker-compose.yml`, started only
-with `docker compose --profile llm up -d`. It is reachable only by the SMS
-server. Because a 1.5B model is weak, its answer is checked before sending
-(the same guard as in the app, stricter for SMS): no Chinese or other foreign
-script, at least 97% Cyrillic, no numbers or crops that are not in the field
-data, enough overlap with the question and data; repeated sentences are
-removed and the answer is cut to about two SMS. If the check fails the farmer
-gets "на этот вопрос надёжно ответить не могу" and a pointer to `INFO`.
-Measured on 2 CPU cores: 10–20 s per answer. Tested on three questions about
-irrigation, crop choice and frost: the 1.5B model passed the check on none of
-them, Qwen2.5-3B on one (and that answer was wrong), so expect mostly the
-"cannot answer reliably" reply. `AGROFY_LLM_HF` picks another GGUF model.
-
-**`anthropic` (default) — Claude through the API.** Claude Opus 5.5
-(`claude-opus-5-5`) via the Messages API, direct HTTP (no Dart SDK);
-`AGROFY_LLM_MODEL` (e.g. the much cheaper `claude-haiku-5-5`) and
-`AGROFY_LLM_EFFORT` (default `medium`) change it; server-side refusal
-fallback is on for models that support it. Off unless `ANTHROPIC_API_KEY` is
-set.
+with `docker compose --profile llm up -d`, reachable only by the SMS server.
+Its answers are checked before sending (no foreign script, at least 97%
+Cyrillic, no numbers or crops missing from the field data); failing answers
+get "на этот вопрос надёжно ответить не могу". Measured on 2 CPU cores: 10–20 s
+per answer; on three test questions the 1.5B model passed the check on none
+and Qwen2.5-3B on one (and that answer was wrong), so this option is mostly a
+fallback for running without any API.
 
 For both: the request carries the question and the active field's data —
 crop, the point rounded to ~1 km, NASA POWER climate month by month, the

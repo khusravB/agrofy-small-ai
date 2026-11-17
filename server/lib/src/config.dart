@@ -92,7 +92,7 @@ class ServerConfig {
     this.anthropicApiKey,
     this.llmProvider = LlmProvider.anthropic,
     this.llmUrl = 'http://llm:8080',
-    this.llmModel = 'claude-opus-5-5',
+    this.llmModel = 'claude-haiku-5-5',
     this.llmEffort = 'medium',
     this.llmPerDay = 10,
     this.packageTtl = const Duration(days: 7),
@@ -137,7 +137,7 @@ class ServerConfig {
         _ => LlmProvider.anthropic,
       },
       llmUrl: (e['AGROFY_LLM_URL'] ?? 'http://llm:8080').replaceAll(RegExp(r'/+$'), ''),
-      llmModel: e['AGROFY_LLM_MODEL'] ?? 'claude-opus-5-5',
+      llmModel: e['AGROFY_LLM_MODEL'] ?? 'claude-haiku-5-5',
       llmEffort: e['AGROFY_LLM_EFFORT'] ?? 'medium',
       llmPerDay: number('AGROFY_LLM_PER_DAY', 10),
     );

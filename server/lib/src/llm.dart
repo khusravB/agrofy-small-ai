@@ -34,6 +34,8 @@ class LlmService {
   static const String fallbackBeta = 'server-side-fallback-2026-07-01';
 
   /// Модели с серверным переключением при отказе (fallbacks: "default").
+  /// У Claude Haiku 5.5 (модель по умолчанию) его нет: отказ приходит как
+  /// stop_reason "refusal" и фермер получает короткий ответ.
   static const Set<String> fallbackModels = {
     'claude-opus-5-5',
     'claude-opus-5',

@@ -111,6 +111,7 @@ class Harness {
     String? anthropicKey,
     http.Response Function(http.Request)? claude,
     http.Response Function(http.Request)? localLlm,
+    String llmModel = 'claude-haiku-5-5',
   }) async {
     final dir = await Directory.systemTemp.createTemp('agrofy_sms');
     final now = DateTime(2026, 11, 15, 12);
@@ -131,6 +132,7 @@ class Harness {
       pagesAtOnce: pagesAtOnce,
       anthropicApiKey: anthropicKey,
       llmProvider: localLlm == null ? LlmProvider.anthropic : LlmProvider.local,
+      llmModel: llmModel,
       llmPerDay: 3,
     );
     final store = await Store.open(dir.path);
@@ -505,7 +507,7 @@ void main() {
             'id': 'msg_1',
             'type': 'message',
             'role': 'assistant',
-            'model': 'claude-opus-5-5',
+            'model': 'claude-haiku-5-5',
             'content': [
               {'type': 'thinking', 'thinking': ''},
               {'type': 'text', 'text': text},
@@ -541,10 +543,11 @@ void main() {
       final call = h.apiCalls.singleWhere((r) => r.url.host == 'api.anthropic.com');
       expect(call.headers['x-api-key'], 'sk-test');
       expect(call.headers['anthropic-version'], '2026-10-21');
-      expect(call.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+      // Haiku 5.5: серверного фоллбэка нет — ни заголовка, ни параметра.
+      expect(call.headers.containsKey('anthropic-beta'), isFalse);
       final body = jsonDecode(call.body) as Map;
-      expect(body['model'], 'claude-opus-5-5');
-      expect(body['fallbacks'], 'default');
+      expect(body['model'], 'claude-haiku-5-5');
+      expect(body.containsKey('fallbacks'), isFalse);
       expect(body['output_config'], {'effort': 'medium'});
       expect(body.containsKey('temperature'), isFalse);
       final content = (body['messages'] as List).single['content'] as String;
@@ -602,6 +605,21 @@ void main() {
       expect(bad, contains('надёжно ответить не могу'));
       expect(bad, contains('INFO F1'));
       expect(bad, isNot(contains('17')));
+    });
+
+    test('Opus 5.5 по настройке: включён серверный фоллбэк при отказе', () async {
+      final h = await Harness.create(
+        anthropicKey: 'sk-test',
+        llmModel: 'claude-opus-5-5',
+        claude: (_) => reply('Хлопок сеют в апреле.'),
+      );
+      await h.sms('/ВОПРОС когда сеять хлопок?');
+      await h.settle();
+      final call = h.apiCalls.singleWhere((r) => r.url.host == 'api.anthropic.com');
+      expect(call.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+      final body = jsonDecode(call.body) as Map;
+      expect(body['model'], 'claude-opus-5-5');
+      expect(body['fallbacks'], 'default');
     });
 
     test('без ключа — понятный ответ, запрос не уходит', () async {

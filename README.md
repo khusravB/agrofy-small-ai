@@ -123,8 +123,9 @@ itself never reads SMS.
   from the same rule-based engine and small models as in the app.
 - **Any question to a language model by SMS (optional).** `/ВОПРОС текст`
   sends the question with the field's data (not the phone number) to a
-  language model: an own Qwen2.5-1.5B on the server (llama.cpp, no API fees,
-  answers checked and often declined) or Claude through the Anthropic API. The
+  language model: Claude Haiku 5.5 through the Anthropic API (about $0.0003
+  per question) or, without any API, an own Qwen2.5-1.5B on the server
+  (llama.cpp; answers checked and often declined). The
   answer comes back as SMS, marked as a language model's answer. Without the
   command, questions stay with the built-in small AI.
 - **Satellite data by SMS.** In AI → Советник, the card «SMS и спутниковые
